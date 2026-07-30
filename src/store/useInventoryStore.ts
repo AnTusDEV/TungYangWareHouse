@@ -127,6 +127,7 @@ interface InventoryState {
 
   // Utility
   resetToMockData: () => void;
+  clearAllDemoData: () => void;
 }
 
 // Initial Default Mock Data
@@ -601,9 +602,9 @@ export const useInventoryStore = create<InventoryState>()(
         if (res.success) {
           set({
             items: res.items || [],
-            categories: res.categories && res.categories.length > 0 ? res.categories : get().categories,
-            warehouses: res.warehouses && res.warehouses.length > 0 ? res.warehouses : get().warehouses,
-            units: res.units && res.units.length > 0 ? res.units : get().units,
+            categories: res.categories || [],
+            warehouses: res.warehouses || [],
+            units: res.units || [],
             vouchers: res.vouchers || [],
             logs: res.logs || [],
             isMySQLConnected: true,
@@ -666,12 +667,12 @@ export const useInventoryStore = create<InventoryState>()(
         }
       },
 
-      warehouses: INITIAL_WAREHOUSES,
-      categories: INITIAL_CATEGORIES,
-      units: INITIAL_UNITS,
-      items: INITIAL_ITEMS,
-      vouchers: INITIAL_VOUCHERS,
-      logs: INITIAL_LOGS,
+      warehouses: [],
+      categories: [],
+      units: [],
+      items: [],
+      vouchers: [],
+      logs: [],
 
       // Warehouses
       addWarehouse: (whData) => {
@@ -1136,6 +1137,17 @@ export const useInventoryStore = create<InventoryState>()(
           items: INITIAL_ITEMS,
           vouchers: INITIAL_VOUCHERS,
           logs: INITIAL_LOGS,
+        });
+      },
+
+      clearAllDemoData: () => {
+        set({
+          warehouses: [],
+          categories: [],
+          units: [],
+          items: [],
+          vouchers: [],
+          logs: [],
         });
       },
     }),

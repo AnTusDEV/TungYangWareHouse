@@ -42,6 +42,7 @@ export function SettingsView() {
 
     // General store actions
     resetToMockData,
+    clearAllDemoData,
     items,
     warehouses,
     vouchers,
@@ -496,32 +497,46 @@ export function SettingsView() {
           </button>
         </div>
 
-        {/* Local Storage Restore */}
+        {/* Clear Demo Data / Sync DB */}
         <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-3">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
+            <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-500">
               <Database className="h-5 w-5" />
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Khôi Phục Dữ Liệu Mẫu Cục Bộ
+                Xóa Toàn Bộ Dữ Liệu Demo
               </h3>
               <p className="text-xs text-slate-500">
-                Nạp lại dữ liệu hàng hóa & kho mẫu
+                Làm sạch bộ nhớ đệm, chỉ tải dữ liệu thực từ MySQL
               </p>
             </div>
           </div>
-          <button
-            onClick={() => {
-              if (window.confirm('Bạn có chắc muốn khôi phục toàn bộ dữ liệu mẫu ban đầu?')) {
-                resetToMockData();
-              }
-            }}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow transition-colors"
-          >
-            <RefreshCw className="h-4 w-4" />
-            <span>Reset Về Dữ Liệu Mẫu</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu demo cục bộ? Hệ thống sẽ chỉ hiển thị dữ liệu từ MySQL.')) {
+                  clearAllDemoData();
+                  fetchFromMySQL();
+                }
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow transition-colors"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Xóa Demo & Lấy Dữ Liệu DB</span>
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm('Khôi phục dữ liệu demo mẫu ban đầu?')) {
+                  resetToMockData();
+                }
+              }}
+              className="px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 transition-colors"
+              title="Khôi phục lại dữ liệu mẫu"
+            >
+              Nạp Mẫu
+            </button>
+          </div>
         </div>
       </div>
 

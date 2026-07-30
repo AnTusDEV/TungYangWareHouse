@@ -15,13 +15,13 @@ import { CategoryUnitManager } from './components/categories/CategoryUnitManager
 import { SettingsView } from './components/settings/SettingsView';
 
 export default function App() {
-  const { activeTab, setActiveTab, theme, fetchFromSupabase } = useInventoryStore();
+  const { activeTab, setActiveTab, theme, fetchFromMySQL } = useInventoryStore();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // Load real data from Supabase on mount
+  // Load real data from MySQL on mount
   useEffect(() => {
-    fetchFromSupabase();
-  }, [fetchFromSupabase]);
+    fetchFromMySQL();
+  }, [fetchFromMySQL]);
 
   // Sync html element dark class
   useEffect(() => {
