@@ -1,0 +1,6 @@
+{
+  "name": "ERP Mini - Quản lý Kho Văn Phòng",
+  "description": "Hệ thống quản lý kho văn phòng thông minh với đầy đủ chức năng nhập xuất tồn, tra cứu, báo cáo và import/export Excel",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
