@@ -25,6 +25,24 @@ import {
   deleteUnitFromSupabase,
   saveVoucherToSupabase,
 } from '../lib/supabaseSync';
+import {
+  MySQLConfig,
+  DEFAULT_MYSQL_CONFIG,
+  getStoredMySQLConfig,
+  saveStoredMySQLConfig,
+  testMySQLConnection,
+  initMySQLTables,
+  fetchAllFromMySQL,
+  saveItemToMySQL,
+  deleteItemFromMySQL,
+  saveWarehouseToMySQL,
+  deleteWarehouseFromMySQL,
+  saveCategoryToMySQL,
+  deleteCategoryFromMySQL,
+  saveUnitToMySQL,
+  deleteUnitFromMySQL,
+  saveVoucherToMySQL,
+} from '../lib/mysqlSync';
 
 interface InventoryState {
   // Navigation & Theme
@@ -34,6 +52,23 @@ interface InventoryState {
   toggleTheme: () => void;
   searchTerm: string;
   setSearchTerm: (term: string) => void;
+
+  // MySQL State
+  mysqlConfig: MySQLConfig;
+  setMysqlConfig: (config: MySQLConfig) => void;
+  isLoadingFromMySQL: boolean;
+  isMySQLConnected: boolean;
+  mysqlError: string | null;
+  fetchFromMySQL: () => Promise<void>;
+  testMySQLConfig: (config?: MySQLConfig) => Promise<{ success: boolean; message: string }>;
+  initMySQLDb: (config?: MySQLConfig) => Promise<{ success: boolean; message: string }>;
+
+  // Password Lock State for Settings
+  adminPassword: string;
+  isSettingsUnlocked: boolean;
+  verifySettingsPassword: (password: string) => boolean;
+  changeAdminPassword: (oldPass: string, newPass: string) => { success: boolean; message: string };
+  lockSettings: () => void;
 
   // Supabase State
   isLoadingFromSupabase: boolean;
@@ -523,6 +558,86 @@ export const useInventoryStore = create<InventoryState>()(
       searchTerm: '',
       setSearchTerm: (term) => set({ searchTerm: term }),
 
+      // MySQL State & Actions
+      mysqlConfig: getStoredMySQLConfig(),
+      setMysqlConfig: (config) => {
+        saveStoredMySQLConfig(config);
+        set({ mysqlConfig: config });
+      },
+      isLoadingFromMySQL: false,
+      isMySQLConnected: false,
+      mysqlError: null,
+
+      adminPassword: 'Antu123!@',
+      isSettingsUnlocked: false,
+
+      verifySettingsPassword: (inputPass) => {
+        const currentPass = get().adminPassword || 'Antu123!@';
+        if (inputPass === currentPass) {
+          set({ isSettingsUnlocked: true });
+          return true;
+        }
+        return false;
+      },
+
+      changeAdminPassword: (oldPass, newPass) => {
+        const currentPass = get().adminPassword || 'Antu123!@';
+        if (oldPass !== currentPass) {
+          return { success: false, message: 'Mật khẩu hiện tại không chính xác!' };
+        }
+        if (!newPass || newPass.trim().length < 4) {
+          return { success: false, message: 'Mật khẩu mới phải có ít nhất 4 ký tự!' };
+        }
+        set({ adminPassword: newPass.trim() });
+        return { success: true, message: 'Đổi mật khẩu cài đặt thành công!' };
+      },
+
+      lockSettings: () => set({ isSettingsUnlocked: false }),
+
+      fetchFromMySQL: async () => {
+        set({ isLoadingFromMySQL: true, mysqlError: null });
+        const config = get().mysqlConfig;
+        const res = await fetchAllFromMySQL(config);
+        if (res.success) {
+          set({
+            items: res.items || [],
+            categories: res.categories && res.categories.length > 0 ? res.categories : get().categories,
+            warehouses: res.warehouses && res.warehouses.length > 0 ? res.warehouses : get().warehouses,
+            units: res.units && res.units.length > 0 ? res.units : get().units,
+            vouchers: res.vouchers || [],
+            logs: res.logs || [],
+            isMySQLConnected: true,
+            isLoadingFromMySQL: false,
+          });
+        } else {
+          set({
+            mysqlError: res.error || 'Không thể tải dữ liệu từ MySQL',
+            isMySQLConnected: false,
+            isLoadingFromMySQL: false,
+          });
+        }
+      },
+
+      testMySQLConfig: async (cfg) => {
+        const configToTest = cfg || get().mysqlConfig;
+        const result = await testMySQLConnection(configToTest);
+        if (result.success) {
+          set({ isMySQLConnected: true, mysqlError: null });
+        } else {
+          set({ isMySQLConnected: false, mysqlError: result.message });
+        }
+        return result;
+      },
+
+      initMySQLDb: async (cfg) => {
+        const configToInit = cfg || get().mysqlConfig;
+        const result = await initMySQLTables(configToInit);
+        if (result.success) {
+          set({ isMySQLConnected: true, mysqlError: null });
+        }
+        return result;
+      },
+
       // Supabase State & Action
       isLoadingFromSupabase: false,
       isSupabaseConnected: false,
@@ -564,6 +679,7 @@ export const useInventoryStore = create<InventoryState>()(
         const newWh: Warehouse = { ...whData, id };
         set((state) => ({ warehouses: [...state.warehouses, newWh] }));
         saveWarehouseToSupabase(newWh);
+        saveWarehouseToMySQL(get().mysqlConfig, newWh);
       },
 
       updateWarehouse: (id, whData) => {
@@ -573,7 +689,10 @@ export const useInventoryStore = create<InventoryState>()(
             item.warehouseId === id ? { ...item, warehouseName: whData.name || item.warehouseName } : item
           );
           const target = updatedWhs.find((w) => w.id === id);
-          if (target) saveWarehouseToSupabase(target);
+          if (target) {
+            saveWarehouseToSupabase(target);
+            saveWarehouseToMySQL(get().mysqlConfig, target);
+          }
           return { warehouses: updatedWhs, items: updatedItems };
         });
       },
@@ -584,6 +703,7 @@ export const useInventoryStore = create<InventoryState>()(
         if (hasItems) return false;
         set({ warehouses: state.warehouses.filter((w) => w.id !== id) });
         deleteWarehouseFromSupabase(id);
+        deleteWarehouseFromMySQL(get().mysqlConfig, id);
         return true;
       },
 
@@ -593,6 +713,7 @@ export const useInventoryStore = create<InventoryState>()(
         const newCat: Category = { ...catData, id };
         set((state) => ({ categories: [...state.categories, newCat] }));
         saveCategoryToSupabase(newCat);
+        saveCategoryToMySQL(get().mysqlConfig, newCat);
       },
 
       updateCategory: (id, catData) => {
@@ -602,7 +723,10 @@ export const useInventoryStore = create<InventoryState>()(
             item.categoryId === id ? { ...item, categoryName: catData.name || item.categoryName } : item
           );
           const target = updatedCats.find((c) => c.id === id);
-          if (target) saveCategoryToSupabase(target);
+          if (target) {
+            saveCategoryToSupabase(target);
+            saveCategoryToMySQL(get().mysqlConfig, target);
+          }
           return { categories: updatedCats, items: updatedItems };
         });
       },
@@ -613,6 +737,7 @@ export const useInventoryStore = create<InventoryState>()(
         if (hasItems) return false;
         set({ categories: state.categories.filter((c) => c.id !== id) });
         deleteCategoryFromSupabase(id);
+        deleteCategoryFromMySQL(get().mysqlConfig, id);
         return true;
       },
 
@@ -622,6 +747,7 @@ export const useInventoryStore = create<InventoryState>()(
         const newUnit: Unit = { ...unitData, id };
         set((state) => ({ units: [...state.units, newUnit] }));
         saveUnitToSupabase(newUnit);
+        saveUnitToMySQL(get().mysqlConfig, newUnit);
       },
 
       updateUnit: (id, unitData) => {
@@ -631,7 +757,10 @@ export const useInventoryStore = create<InventoryState>()(
             item.unitId === id ? { ...item, unitName: unitData.name || item.unitName } : item
           );
           const target = updatedUnits.find((u) => u.id === id);
-          if (target) saveUnitToSupabase(target);
+          if (target) {
+            saveUnitToSupabase(target);
+            saveUnitToMySQL(get().mysqlConfig, target);
+          }
           return { units: updatedUnits, items: updatedItems };
         });
       },
@@ -642,6 +771,7 @@ export const useInventoryStore = create<InventoryState>()(
         if (hasItems) return false;
         set({ units: state.units.filter((u) => u.id !== id) });
         deleteUnitFromSupabase(id);
+        deleteUnitFromMySQL(get().mysqlConfig, id);
         return true;
       },
 
@@ -671,6 +801,7 @@ export const useInventoryStore = create<InventoryState>()(
 
         set({ items: [newItem, ...state.items] });
         saveItemToSupabase(newItem);
+        saveItemToMySQL(get().mysqlConfig, newItem);
         return newItem;
       },
 
@@ -703,6 +834,7 @@ export const useInventoryStore = create<InventoryState>()(
 
         if (updatedItem) {
           saveItemToSupabase(updatedItem);
+          saveItemToMySQL(get().mysqlConfig, updatedItem);
         }
       },
 
@@ -711,6 +843,7 @@ export const useInventoryStore = create<InventoryState>()(
           items: state.items.filter((item) => item.id !== id),
         }));
         deleteItemFromSupabase(id);
+        deleteItemFromMySQL(get().mysqlConfig, id);
         return true;
       },
 
@@ -875,6 +1008,7 @@ export const useInventoryStore = create<InventoryState>()(
         });
 
         saveVoucherToSupabase(newVoucher, newLogs, updatedItemsList);
+        saveVoucherToMySQL(get().mysqlConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu nhập kho thành công: ${voucherCode}`, voucher: newVoucher };
       },
@@ -983,6 +1117,7 @@ export const useInventoryStore = create<InventoryState>()(
         });
 
         saveVoucherToSupabase(newVoucher, newLogs, updatedItemsList);
+        saveVoucherToMySQL(get().mysqlConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu xuất kho thành công: ${voucherCode}`, voucher: newVoucher };
       },
