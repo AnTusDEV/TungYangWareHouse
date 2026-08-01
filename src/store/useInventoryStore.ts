@@ -855,38 +855,97 @@ export const useInventoryStore = create<InventoryState>()(
         const newItems: Item[] = [];
         const existingCodes = [...state.items.map((i) => i.code)];
 
-        importedData.forEach((row) => {
+        let currentCategories = [...state.categories];
+        let currentUnits = [...state.units];
+        let currentWarehouses = [...state.warehouses];
+
+        const newlyCreatedCats: Category[] = [];
+        const newlyCreatedUnits: Unit[] = [];
+        const newlyCreatedWarehouses: Warehouse[] = [];
+
+        importedData.forEach((row, idx) => {
           if (!row.name) {
             errorCount++;
             return;
           }
 
-          // Match category or create
-          let cat = state.categories.find(
-            (c) => c.name.toLowerCase() === (row.categoryName || '').toLowerCase()
+          // 1. Match or Create Category
+          const rowCatName = (row.categoryName || '').trim();
+          let cat = currentCategories.find(
+            (c) =>
+              c.name.toLowerCase() === rowCatName.toLowerCase() ||
+              c.code.toLowerCase() === rowCatName.toLowerCase()
           );
-          let catId = cat ? cat.id : state.categories[0]?.id || 'cat-1';
-          let catName = cat ? cat.name : state.categories[0]?.name || 'Khác';
+          if (!cat && rowCatName) {
+            const catCode = `DM${String(currentCategories.length + 1).padStart(2, '0')}`;
+            cat = {
+              id: `cat-imp-${Date.now()}-${idx}`,
+              code: catCode,
+              name: rowCatName,
+              description: `Nhóm hàng ${rowCatName} tự động tạo từ Excel import`,
+            };
+            currentCategories.push(cat);
+            newlyCreatedCats.push(cat);
+            saveCategoryToSupabase(cat);
+            saveCategoryToMySQL(state.mysqlConfig, cat);
+          }
+          let catId = cat ? cat.id : currentCategories[0]?.id || 'cat-1';
+          let catName = cat ? cat.name : currentCategories[0]?.name || 'Văn phòng phẩm';
 
-          // Match unit or create
-          let unit = state.units.find(
-            (u) => u.name.toLowerCase() === (row.unitName || '').toLowerCase()
+          // 2. Match or Create Unit
+          const rowUnitName = (row.unitName || '').trim();
+          let unit = currentUnits.find(
+            (u) => u.name.toLowerCase() === rowUnitName.toLowerCase()
           );
-          let unitId = unit ? unit.id : state.units[0]?.id || 'u-3';
-          let unitName = unit ? unit.name : state.units[0]?.name || 'Cái';
+          if (!unit && rowUnitName) {
+            unit = {
+              id: `unit-imp-${Date.now()}-${idx}`,
+              name: rowUnitName,
+              description: `Đơn vị tính ${rowUnitName}`,
+            };
+            currentUnits.push(unit);
+            newlyCreatedUnits.push(unit);
+            saveUnitToSupabase(unit);
+            saveUnitToMySQL(state.mysqlConfig, unit);
+          }
+          let unitId = unit ? unit.id : currentUnits[0]?.id || 'u-3';
+          let unitName = unit ? unit.name : currentUnits[0]?.name || 'Cái';
 
-          // Match warehouse
-          let wh = state.warehouses.find(
-            (w) => w.name.toLowerCase() === (row.warehouseName || '').toLowerCase()
+          // 3. Match or Create Warehouse
+          const rowWhName = (row.warehouseName || '').trim();
+          let wh = currentWarehouses.find(
+            (w) =>
+              w.name.toLowerCase() === rowWhName.toLowerCase() ||
+              w.code.toLowerCase() === rowWhName.toLowerCase()
           );
-          let whId = wh ? wh.id : state.warehouses[0]?.id || 'wh-1';
-          let whName = wh ? wh.name : state.warehouses[0]?.name || 'Kho 1';
+          if (!wh && rowWhName) {
+            const whCode = `KHO-${currentWarehouses.length + 1}`;
+            wh = {
+              id: `wh-imp-${Date.now()}-${idx}`,
+              code: whCode,
+              name: rowWhName,
+              location: 'Khu vực chung',
+              manager: 'Quản kho chính',
+              description: `Kho ${rowWhName} tự động tạo từ Excel import`,
+            };
+            currentWarehouses.push(wh);
+            newlyCreatedWarehouses.push(wh);
+            saveWarehouseToSupabase(wh);
+            saveWarehouseToMySQL(state.mysqlConfig, wh);
+          }
+          let whId = wh ? wh.id : currentWarehouses[0]?.id || 'wh-1';
+          let whName = wh ? wh.name : currentWarehouses[0]?.name || 'Kho 1';
 
+          // Code generation
           const code = generateItemCode([...existingCodes, ...newItems.map((n) => n.code)]);
           const now = new Date().toISOString();
 
+          // Stock Quantity - negative stock or '-' defaults to 0
+          const rawQty = Number(row.stockQuantity);
+          const stockQuantity = isNaN(rawQty) || rawQty < 0 ? 0 : rawQty;
+
           const newItem: Item = {
-            id: `item-imp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            id: `item-imp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}-${idx}`,
             code,
             name: row.name,
             categoryId: catId,
@@ -895,8 +954,8 @@ export const useInventoryStore = create<InventoryState>()(
             unitName: unitName,
             warehouseId: whId,
             warehouseName: whName,
-            stockQuantity: Number(row.stockQuantity) || 0,
-            minStockLevel: 0,
+            stockQuantity,
+            minStockLevel: Number(row.minStockLevel) || 0,
             maxStockLevel: Number(row.maxStockLevel) || 100,
             note: row.note || 'Import từ Excel',
             createdAt: now,
@@ -904,12 +963,26 @@ export const useInventoryStore = create<InventoryState>()(
           };
 
           newItems.push(newItem);
+
+          // Save item to DB (Supabase & MySQL)
           saveItemToSupabase(newItem);
+          saveItemToMySQL(state.mysqlConfig, newItem);
+
           successCount++;
         });
 
-        if (newItems.length > 0) {
-          set((s) => ({ items: [...newItems, ...s.items] }));
+        if (
+          newItems.length > 0 ||
+          newlyCreatedCats.length > 0 ||
+          newlyCreatedUnits.length > 0 ||
+          newlyCreatedWarehouses.length > 0
+        ) {
+          set((s) => ({
+            items: [...newItems, ...s.items],
+            categories: currentCategories,
+            units: currentUnits,
+            warehouses: currentWarehouses,
+          }));
         }
 
         return { successCount, errorCount };

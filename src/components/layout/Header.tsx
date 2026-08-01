@@ -11,8 +11,6 @@ import {
   XCircle,
   ArrowRight,
   Database,
-  RefreshCw,
-  Server,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { formatNumber } from '../../lib/formatters';
@@ -37,9 +35,6 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
     searchTerm,
     setSearchTerm,
     items,
-    isMySQLConnected,
-    isLoadingFromMySQL,
-    fetchFromMySQL,
     isSupabaseConnected,
     isLoadingFromSupabase,
     fetchFromSupabase,
@@ -239,24 +234,6 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
 
       {/* Right Actions */}
       <div className="flex items-center gap-2">
-        {/* MySQL Status & Sync Button */}
-        <button
-          onClick={() => fetchFromMySQL()}
-          disabled={isLoadingFromMySQL}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
-            isMySQLConnected
-              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
-              : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
-          }`}
-          title="Tải lại dữ liệu từ MySQL Database"
-        >
-          <Server className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">
-            {isMySQLConnected ? 'MySQL Connected' : 'MySQL Offline'}
-          </span>
-          <RefreshCw className={`h-3 w-3 ${isLoadingFromMySQL ? 'animate-spin' : ''}`} />
-        </button>
-
         {/* Quick Action (+ Nhập / + Xuất) */}
         <div className="flex items-center gap-1.5">
           <button
