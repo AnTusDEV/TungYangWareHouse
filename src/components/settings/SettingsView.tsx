@@ -145,13 +145,6 @@ export function SettingsView() {
             </p>
           </div>
 
-          <div className="p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-700 dark:text-cyan-300 text-xs flex items-center gap-2">
-            <KeyRound className="h-4 w-4 shrink-0 text-cyan-500" />
-            <span>
-              Mật khẩu mặc định ban đầu: <strong className="font-mono bg-cyan-500/20 px-1.5 py-0.5 rounded text-cyan-900 dark:text-cyan-100">Antu123!@</strong>
-            </span>
-          </div>
-
           <form onSubmit={handleUnlock} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
@@ -162,7 +155,9 @@ export function SettingsView() {
                   type={showPassword ? 'text' : 'password'}
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="Nhập mật khẩu (Mặc định: Antu123!@)"
+                  placeholder="Nhập mật khẩu"
+                  autoComplete="current-password"
+                  data-lpignore="true"
                   className="w-full pl-4 pr-11 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all"
                   autoFocus
                 />
@@ -319,6 +314,8 @@ export function SettingsView() {
                 value={formConfig.password || ''}
                 onChange={(e) => setFormConfig({ ...formConfig, password: e.target.value })}
                 placeholder="Mật khẩu MySQL"
+                autoComplete="off"
+                data-lpignore="true"
                 className="w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
               />
               <button
@@ -402,7 +399,7 @@ export function SettingsView() {
               Đổi Mật Khẩu Truy Cập Cài Đặt
             </h3>
             <p className="text-xs text-slate-500">
-              Thay đổi mật khẩu quản trị bảo vệ màn hình Cài đặt này (Mật khẩu mặc định hiện tại: <code className="text-cyan-500">Antu123!@</code>)
+              Thay đổi mật khẩu quản trị bảo vệ màn hình Cài đặt này
             </p>
           </div>
         </div>
@@ -428,6 +425,8 @@ export function SettingsView() {
               value={currentPass}
               onChange={(e) => setCurrentPass(e.target.value)}
               placeholder="Nhập mật khẩu hiện tại"
+              autoComplete="current-password"
+              data-lpignore="true"
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
               required
             />
@@ -442,6 +441,8 @@ export function SettingsView() {
               value={newPass}
               onChange={(e) => setNewPass(e.target.value)}
               placeholder="Mật khẩu mới"
+              autoComplete="new-password"
+              data-lpignore="true"
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
               required
             />
@@ -457,6 +458,8 @@ export function SettingsView() {
                 value={confirmPass}
                 onChange={(e) => setConfirmPass(e.target.value)}
                 placeholder="Nhập lại mật khẩu mới"
+                autoComplete="new-password"
+                data-lpignore="true"
                 className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 required
               />
