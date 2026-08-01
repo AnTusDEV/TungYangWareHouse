@@ -27,14 +27,20 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
 
     try {
       const rows = await parseExcelFile(selectedFile);
-      const formatted = rows.map((r: any) => ({
-        name: r['Tên Hàng Hóa'] || r['Tên hàng'] || r['Ten Hang'] || r['Name'] || '',
-        categoryName: r['Nhóm Hàng'] || r['Nhóm hàng'] || r['Category'] || 'Sổ sách',
-        unitName: r['Đơn Vị Tính'] || r['Đơn vị'] || r['Unit'] || 'Cái',
-        warehouseName: r['Kho'] || r['Warehouse'] || 'Kho 1',
-        stockQuantity: Number(r['Số Lượng Tồn'] || r['Tồn kho'] || r['Stock'] || 0),
-        note: r['Ghi Chú'] || r['Ghi chú'] || '',
-      }));
+      const formatted = rows.map((r: any) => {
+        const rawQty = r['Số Lượng Tồn'] ?? r['Tồn kho'] ?? r['Số lượng'] ?? r['Stock'] ?? 0;
+        const parsedQty = Number(rawQty);
+        const stockQuantity = isNaN(parsedQty) || parsedQty < 0 ? 0 : parsedQty;
+
+        return {
+          name: r['Tên Hàng Hóa'] || r['Tên hàng'] || r['Ten Hang'] || r['Name'] || '',
+          categoryName: r['Nhóm Hàng'] || r['Nhóm hàng'] || r['Category'] || 'Văn phòng phẩm',
+          unitName: r['Đơn Vị Tính'] || r['Đơn vị'] || r['Unit'] || 'Cái',
+          warehouseName: r['Kho'] || r['Warehouse'] || 'Kho 1',
+          stockQuantity,
+          note: r['Ghi Chú'] || r['Ghi chú'] || '',
+        };
+      });
 
       setPreviewData(formatted);
     } catch (error) {
@@ -49,7 +55,7 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
 
     const res = importItems(previewData);
     setResultMessage(
-      `Đã nhập thành công ${res.successCount} mặt hàng hàng hóa vào hệ thống.`
+      `Đã nhập và lưu thành công ${res.successCount} mặt hàng vào cơ sở dữ liệu (Database).`
     );
     setTimeout(() => {
       onClose();

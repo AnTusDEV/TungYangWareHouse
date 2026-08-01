@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { Warehouse as WarehouseIcon, Plus, Edit2, Trash2, MapPin, User, Package, AlertCircle } from 'lucide-react';
+import { Warehouse as WarehouseIcon, Plus, Edit2, Trash2, MapPin, User, Package, AlertCircle, Eye } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { Warehouse } from '../../types/inventory';
 import { Modal } from '../common/Modal';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { WarehouseItemsModal } from '../common/WarehouseItemsModal';
 import { formatNumber } from '../../lib/formatters';
 
 export function WarehouseManager() {
   const { warehouses, items, addWarehouse, updateWarehouse, deleteWarehouse } = useInventoryStore();
 
+  const [selectedWarehouseModal, setSelectedWarehouseModal] = useState<Warehouse | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -117,6 +119,13 @@ export function WarehouseManager() {
 
                   <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                     <button
+                      onClick={() => setSelectedWarehouseModal(wh)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      title="Xem chi tiết danh sách hàng hóa trong kho"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                    <button
                       onClick={() => handleOpenEdit(wh)}
                       className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                       title="Sửa thông tin kho"
@@ -134,8 +143,11 @@ export function WarehouseManager() {
                 </div>
 
                 {/* Warehouse Name */}
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mb-1">
-                  {wh.name}
+                <h3
+                  onClick={() => setSelectedWarehouseModal(wh)}
+                  className="text-base font-bold text-slate-900 dark:text-slate-100 mb-1 cursor-pointer hover:text-cyan-500 transition-colors flex items-center gap-1.5"
+                >
+                  <span>{wh.name}</span>
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 mb-4">
                   {wh.description || 'Chưa có mô tả'}
@@ -155,18 +167,22 @@ export function WarehouseManager() {
               </div>
 
               {/* Stats Footer */}
-              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+              <div
+                onClick={() => setSelectedWarehouseModal(wh)}
+                className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 -mx-6 -mb-6 p-4 rounded-b-2xl transition-colors"
+              >
                 <div>
                   <span className="text-slate-400">Số mặt hàng:</span>
                   <span className="ml-1 font-bold text-slate-900 dark:text-slate-100">
                     {whItems.length}
                   </span>
                 </div>
-                <div>
+                <div className="flex items-center gap-1.5">
                   <span className="text-slate-400">Tổng tồn kho:</span>
-                  <span className="ml-1 font-bold text-cyan-600 dark:text-cyan-400">
+                  <span className="font-bold text-cyan-600 dark:text-cyan-400">
                     {formatNumber(totalQty)}
                   </span>
+                  <Eye className="h-3.5 w-3.5 text-cyan-500 ml-1" />
                 </div>
               </div>
             </div>
@@ -284,6 +300,13 @@ export function WarehouseManager() {
         onClose={() => setDeletingId(null)}
         onConfirm={handleConfirmDelete}
         message="Bạn có chắc chắn muốn xóa phòng kho này không?"
+      />
+
+      {/* Warehouse Items Detail Popup Modal */}
+      <WarehouseItemsModal
+        isOpen={selectedWarehouseModal !== null}
+        onClose={() => setSelectedWarehouseModal(null)}
+        warehouse={selectedWarehouseModal}
       />
     </div>
   );

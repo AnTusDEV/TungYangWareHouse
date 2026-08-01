@@ -31,12 +31,19 @@ import {
 } from 'recharts';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { formatNumber, getStockStatus } from '../../lib/formatters';
+import { CategoryItemsModal } from '../common/CategoryItemsModal';
+import { WarehouseItemsModal } from '../common/WarehouseItemsModal';
+import { Category, Warehouse } from '../../types/inventory';
 
 const PIE_COLORS = ['#06b6d4', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 
 export function Dashboard() {
   const { items, vouchers, categories, warehouses, setActiveTab } = useInventoryStore();
   const [dateFilter, setDateFilter] = useState<'this-month' | 'last-month' | 'all'>('this-month');
+
+  // Popups State for Categories and Warehouses
+  const [selectedCategoryModal, setSelectedCategoryModal] = useState<Category | null>(null);
+  const [selectedWarehouseModal, setSelectedWarehouseModal] = useState<Warehouse | null>(null);
 
   // KPI Calculations
   const totalItemsCount = items.length;
@@ -277,18 +284,28 @@ export function Dashboard() {
 
           {/* Custom Legend */}
           <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-100 dark:border-slate-800/80 text-xs">
-            {categoryData.map((entry, index) => (
-              <div key={entry.name} className="flex items-center gap-2 truncate">
-                <span
-                  className="h-2.5 w-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: PIE_COLORS[index % PIE_COLORS.length] }}
-                />
-                <span className="text-slate-600 dark:text-slate-300 truncate">{entry.name}</span>
-                <span className="ml-auto font-semibold text-slate-900 dark:text-slate-100">
-                  {formatNumber(entry.value)}
-                </span>
-              </div>
-            ))}
+            {categoryData.map((entry, index) => {
+              const matchedCat = categories.find((c) => c.name === entry.name);
+              return (
+                <div
+                  key={entry.name}
+                  onClick={() => matchedCat && setSelectedCategoryModal(matchedCat)}
+                  className="flex items-center gap-2 truncate p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer transition-colors group"
+                  title="Nhấn để xem popup danh sách sản phẩm thuộc nhóm này"
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: PIE_COLORS[index % PIE_COLORS.length] }}
+                  />
+                  <span className="text-slate-600 dark:text-slate-300 truncate group-hover:text-cyan-500 font-medium">
+                    {entry.name}
+                  </span>
+                  <span className="ml-auto font-semibold text-slate-900 dark:text-slate-100 group-hover:text-cyan-500">
+                    {formatNumber(entry.value)}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -440,6 +457,78 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Row 3: Warehouse Quick Breakdown Cards */}
+      <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Boxes className="h-4 w-4 text-cyan-500" />
+              Tra Cứu Nhanh Tồn Kho Theo Phòng Kho
+            </h3>
+            <p className="text-xs text-slate-500">Nhấn vào từng phòng kho bên dưới để mở popup xem số lượng tồn chi tiết</p>
+          </div>
+          <button
+            onClick={() => setActiveTab('warehouses')}
+            className="text-xs text-cyan-500 hover:underline font-semibold"
+          >
+            Sơ đồ kho &rarr;
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {warehouses.map((wh) => {
+            const whItems = items.filter((i) => i.warehouseId === wh.id);
+            const totalQty = whItems.reduce((sum, i) => sum + i.stockQuantity, 0);
+
+            return (
+              <div
+                key={wh.id}
+                onClick={() => setSelectedWarehouseModal(wh)}
+                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-cyan-500/50 bg-slate-50/50 dark:bg-slate-800/30 hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/10 text-cyan-500 border border-cyan-500/20">
+                      {wh.code}
+                    </span>
+                    <span className="text-[11px] text-slate-400 group-hover:text-cyan-500 font-medium">
+                      Xem popup &rarr;
+                    </span>
+                  </div>
+                  <h4 className="font-bold text-slate-900 dark:text-slate-100 text-xs group-hover:text-cyan-500 transition-colors">
+                    {wh.name}
+                  </h4>
+                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                    Quản kho: {wh.manager || 'Chưa phân công'}
+                  </p>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">{whItems.length} mặt hàng</span>
+                  <span className="font-bold text-cyan-600 dark:text-cyan-400">
+                    {formatNumber(totalQty)} tồn
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Category Items Detail Popup Modal */}
+      <CategoryItemsModal
+        isOpen={selectedCategoryModal !== null}
+        onClose={() => setSelectedCategoryModal(null)}
+        category={selectedCategoryModal}
+      />
+
+      {/* Warehouse Items Detail Popup Modal */}
+      <WarehouseItemsModal
+        isOpen={selectedWarehouseModal !== null}
+        onClose={() => setSelectedWarehouseModal(null)}
+        warehouse={selectedWarehouseModal}
+      />
     </div>
   );
 }
