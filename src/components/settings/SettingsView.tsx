@@ -42,6 +42,7 @@ export function SettingsView() {
 
     // General store actions
     resetToMockData,
+    clearAllDemoData,
     items,
     warehouses,
     vouchers,
@@ -144,7 +145,12 @@ export function SettingsView() {
             </p>
           </div>
 
-
+          <div className="p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-700 dark:text-cyan-300 text-xs flex items-center gap-2">
+            <KeyRound className="h-4 w-4 shrink-0 text-cyan-500" />
+            <span>
+              Mật khẩu mặc định ban đầu: <strong className="font-mono bg-cyan-500/20 px-1.5 py-0.5 rounded text-cyan-900 dark:text-cyan-100">Antu123!@</strong>
+            </span>
+          </div>
 
           <form onSubmit={handleUnlock} className="space-y-4">
             <div>
@@ -156,7 +162,7 @@ export function SettingsView() {
                   type={showPassword ? 'text' : 'password'}
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="Nhập mật khẩu"
+                  placeholder="Nhập mật khẩu (Mặc định: Antu123!@)"
                   className="w-full pl-4 pr-11 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all"
                   autoFocus
                 />
@@ -226,10 +232,11 @@ export function SettingsView() {
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                   Cấu Hình Kết Nối MySQL Database
                 </h3>
-                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${isMySQLConnected
-                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                  }`}>
+                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                  isMySQLConnected
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                }`}>
                   {isMySQLConnected ? 'MySQL Đã Kết Nối' : 'Chưa Kết Nối MySQL'}
                 </span>
               </div>
@@ -242,10 +249,11 @@ export function SettingsView() {
 
         {/* Feedback Alert */}
         {testResult && (
-          <div className={`p-3.5 rounded-xl text-xs flex items-center justify-between gap-2 border ${testResult.success
-            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-300'
-            : 'bg-rose-500/10 border-rose-500/20 text-rose-700 dark:text-rose-300'
-            }`}>
+          <div className={`p-3.5 rounded-xl text-xs flex items-center justify-between gap-2 border ${
+            testResult.success
+              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+              : 'bg-rose-500/10 border-rose-500/20 text-rose-700 dark:text-rose-300'
+          }`}>
             <div className="flex items-center gap-2">
               {testResult.success ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" /> : <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />}
               <span>{testResult.message}</span>
@@ -394,16 +402,17 @@ export function SettingsView() {
               Đổi Mật Khẩu Truy Cập Cài Đặt
             </h3>
             <p className="text-xs text-slate-500">
-              Thay đổi mật khẩu quản trị bảo vệ màn hình Cài đặt này
+              Thay đổi mật khẩu quản trị bảo vệ màn hình Cài đặt này (Mật khẩu mặc định hiện tại: <code className="text-cyan-500">Antu123!@</code>)
             </p>
           </div>
         </div>
 
         {changePassFeedback && (
-          <div className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${changePassFeedback.success
-            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-            : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400'
-            }`}>
+          <div className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
+            changePassFeedback.success
+              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+              : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400'
+          }`}>
             {changePassFeedback.success ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
             <span>{changePassFeedback.message}</span>
           </div>
@@ -488,32 +497,46 @@ export function SettingsView() {
           </button>
         </div>
 
-        {/* Local Storage Restore */}
+        {/* Clear Demo Data / Sync DB */}
         <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-3">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
+            <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-500">
               <Database className="h-5 w-5" />
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Khôi Phục Dữ Liệu Mẫu Cục Bộ
+                Xóa Toàn Bộ Dữ Liệu Demo
               </h3>
               <p className="text-xs text-slate-500">
-                Nạp lại dữ liệu hàng hóa & kho mẫu
+                Làm sạch bộ nhớ đệm, chỉ tải dữ liệu thực từ MySQL
               </p>
             </div>
           </div>
-          <button
-            onClick={() => {
-              if (window.confirm('Bạn có chắc muốn khôi phục toàn bộ dữ liệu mẫu ban đầu?')) {
-                resetToMockData();
-              }
-            }}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow transition-colors"
-          >
-            <RefreshCw className="h-4 w-4" />
-            <span>Reset Về Dữ Liệu Mẫu</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu demo cục bộ? Hệ thống sẽ chỉ hiển thị dữ liệu từ MySQL.')) {
+                  clearAllDemoData();
+                  fetchFromMySQL();
+                }
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow transition-colors"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Xóa Demo & Lấy Dữ Liệu DB</span>
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm('Khôi phục dữ liệu demo mẫu ban đầu?')) {
+                  resetToMockData();
+                }
+              }}
+              className="px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 transition-colors"
+              title="Khôi phục lại dữ liệu mẫu"
+            >
+              Nạp Mẫu
+            </button>
+          </div>
         </div>
       </div>
 

@@ -18,10 +18,11 @@ export default function App() {
   const { activeTab, setActiveTab, theme, fetchFromMySQL } = useInventoryStore();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // Load real data from MySQL on mount
+  // Load real data from MySQL on mount and ensure initial tab is dashboard
   useEffect(() => {
+    setActiveTab('dashboard');
     fetchFromMySQL();
-  }, [fetchFromMySQL]);
+  }, [fetchFromMySQL, setActiveTab]);
 
   // Sync html element dark class
   useEffect(() => {

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Boxes, Plus, Edit2, Trash2, Layers, Tag, AlertCircle } from 'lucide-react';
+import { Boxes, Plus, Edit2, Trash2, Layers, Tag, Eye } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { Category, Unit } from '../../types/inventory';
 import { Modal } from '../common/Modal';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { CategoryItemsModal } from '../common/CategoryItemsModal';
 
 export function CategoryUnitManager() {
   const {
@@ -19,6 +20,9 @@ export function CategoryUnitManager() {
   } = useInventoryStore();
 
   const [activeSubTab, setActiveSubTab] = useState<'categories' | 'units'>('categories');
+
+  // Category Items Modal State
+  const [selectedCategoryModal, setSelectedCategoryModal] = useState<Category | null>(null);
 
   // Category Modal State
   const [isCatModalOpen, setIsCatModalOpen] = useState(false);
@@ -173,28 +177,48 @@ export function CategoryUnitManager() {
                       </span>
                       <div className="flex items-center gap-1">
                         <button
+                          onClick={() => setSelectedCategoryModal(cat)}
+                          className="p-1 rounded text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                          title="Xem danh sách sản phẩm thuộc nhóm này"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </button>
+                        <button
                           onClick={() => handleOpenEditCat(cat)}
-                          className="p-1 rounded text-slate-400 hover:text-cyan-500"
+                          className="p-1 rounded text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                          title="Sửa nhóm hàng"
                         >
                           <Edit2 className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={() => setDeletingCatId(cat.id)}
-                          className="p-1 rounded text-slate-400 hover:text-rose-500"
+                          className="p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                          title="Xóa nhóm hàng"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       </div>
                     </div>
-                    <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm mb-1">
-                      {cat.name}
+                    <h4
+                      onClick={() => setSelectedCategoryModal(cat)}
+                      className="font-bold text-slate-900 dark:text-slate-100 text-sm mb-1 cursor-pointer hover:text-cyan-500 transition-colors flex items-center gap-1.5"
+                    >
+                      <span>{cat.name}</span>
                     </h4>
                     <p className="text-xs text-slate-500 line-clamp-2">{cat.description || 'Chưa có mô tả'}</p>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                  <div
+                    onClick={() => setSelectedCategoryModal(cat)}
+                    className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-slate-400 cursor-pointer hover:text-cyan-500 transition-colors group/btn"
+                  >
                     <span>Số mặt hàng:</span>
-                    <strong className="text-slate-800 dark:text-slate-200">{catItemsCount} sản phẩm</strong>
+                    <div className="flex items-center gap-1">
+                      <strong className="text-slate-800 dark:text-slate-200 group-hover/btn:text-cyan-500 transition-colors">
+                        {catItemsCount} sản phẩm
+                      </strong>
+                      <Eye className="h-3 w-3 text-cyan-500 opacity-80" />
+                    </div>
                   </div>
                 </div>
               );
@@ -373,6 +397,13 @@ export function CategoryUnitManager() {
         onClose={() => setDeletingUnitId(null)}
         onConfirm={handleConfirmDeleteUnit}
         message="Xác nhận xóa đơn vị tính này?"
+      />
+
+      {/* Category Items Detail Popup Modal */}
+      <CategoryItemsModal
+        isOpen={selectedCategoryModal !== null}
+        onClose={() => setSelectedCategoryModal(null)}
+        category={selectedCategoryModal}
       />
     </div>
   );

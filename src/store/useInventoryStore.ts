@@ -1154,7 +1154,6 @@ export const useInventoryStore = create<InventoryState>()(
     {
       name: 'erp-mini-inventory-storage',
       partialize: (state) => ({
-        activeTab: state.activeTab,
         theme: state.theme,
         warehouses: state.warehouses,
         categories: state.categories,
