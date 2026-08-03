@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useInventoryStore } from './store/useInventoryStore';
+import { useAuthStore } from './store/useAuthStore';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 
@@ -13,9 +14,12 @@ import { TransactionHistory } from './components/history/TransactionHistory';
 import { ReportsView } from './components/reports/ReportsView';
 import { CategoryUnitManager } from './components/categories/CategoryUnitManager';
 import { SettingsView } from './components/settings/SettingsView';
+import { AccountManager } from './components/auth/AccountManager';
+import { LoginView } from './components/auth/LoginView';
 
 export default function App() {
   const { activeTab, setActiveTab, theme, fetchFromSQLServer } = useInventoryStore();
+  const { isAuthenticated } = useAuthStore();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Load real data from SQL Server on mount and ensure initial tab is dashboard
@@ -32,6 +36,11 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  // If not logged in, render authentication login view
+  if (!isAuthenticated) {
+    return <LoginView />;
+  }
 
   // Render main tab view
   const renderContent = () => {
@@ -54,6 +63,8 @@ export default function App() {
         return <ReportsView />;
       case 'categories':
         return <CategoryUnitManager />;
+      case 'accounts':
+        return <AccountManager />;
       case 'settings':
         return <SettingsView />;
       default:

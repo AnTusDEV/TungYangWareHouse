@@ -1,5 +1,7 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
+import bcrypt from 'bcryptjs';
 import mysql from 'mysql2/promise';
 import mssql from 'mssql';
 import { createServer as createViteServer } from 'vite';
@@ -8,6 +10,400 @@ const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+// --- USER & AUTH PERSISTENCE ---
+interface ServerUser {
+  id: string;
+  username: string;
+  passwordHash: string;
+  fullName: string;
+  position: string;
+  notes?: string;
+  role: 'admin' | 'user';
+  status: 'active' | 'locked';
+  createdAt: string;
+  updatedAt?: string;
+}
+
+const USERS_FILE_PATH = path.join(process.cwd(), 'data', 'users.json');
+
+function ensureDataDirExists() {
+  const dataDir = path.join(process.cwd(), 'data');
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+}
+
+function loadServerUsers(): ServerUser[] {
+  ensureDataDirExists();
+  if (fs.existsSync(USERS_FILE_PATH)) {
+    try {
+      const raw = fs.readFileSync(USERS_FILE_PATH, 'utf-8');
+      const users = JSON.parse(raw);
+      if (Array.isArray(users) && users.length > 0) {
+        return users;
+      }
+    } catch (e) {
+      console.error('Error reading users.json:', e);
+    }
+  }
+
+  // Seed initial default users
+  const defaultAdminHash = bcrypt.hashSync('admin123', 10);
+  const defaultUserHash = bcrypt.hashSync('user123', 10);
+
+  const initialUsers: ServerUser[] = [
+    {
+      id: 'usr_admin',
+      username: 'admin',
+      passwordHash: defaultAdminHash,
+      fullName: 'Quản Trị Viên Hệ Thống',
+      position: 'Quản trị viên',
+      notes: 'Tài khoản quản trị cao nhất hệ thống',
+      role: 'admin',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: 'usr_nhanvien',
+      username: 'nhanvien',
+      passwordHash: defaultUserHash,
+      fullName: 'Nguyễn Văn Kho',
+      position: 'Thủ kho',
+      notes: 'Tài khoản nhân viên vận hành kho',
+      role: 'user',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  try {
+    fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(initialUsers, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error writing initial users.json:', e);
+  }
+
+  return initialUsers;
+}
+
+function saveServerUsers(users: ServerUser[]) {
+  ensureDataDirExists();
+  try {
+    fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(users, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error saving users.json:', e);
+  }
+}
+
+function sanitizeUser(u: ServerUser) {
+  const { passwordHash, ...safe } = u;
+  return safe;
+}
+
+// --- AUTH API ROUTES ---
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: 'Vui lòng nhập đầy đủ tên đăng nhập và mật khẩu' });
+    }
+
+    const cleanUsername = String(username).trim().toLowerCase();
+    const users = loadServerUsers();
+    const user = users.find((u) => u.username.toLowerCase() === cleanUsername);
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
+    }
+
+    if (user.status === 'locked') {
+      return res.status(400).json({ success: false, message: 'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Quản trị viên!' });
+    }
+
+    const isMatch = bcrypt.compareSync(String(password), user.passwordHash);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
+    }
+
+    const token = `token_${user.id}_${Date.now()}`;
+    res.json({
+      success: true,
+      user: sanitizeUser(user),
+      token,
+      message: 'Đăng nhập thành công',
+    });
+  } catch (err: any) {
+    console.error('Login Error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Lỗi hệ thống khi đăng nhập' });
+  }
+});
+
+app.get('/api/auth/me', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+    }
+    const token = authHeader.replace('Bearer ', '').trim();
+    const parts = token.split('_');
+    const userId = parts[1];
+
+    const users = loadServerUsers();
+    const user = users.find((u) => u.id === userId);
+
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại' });
+    }
+
+    if (user.status === 'locked') {
+      return res.status(403).json({ success: false, message: 'Tài khoản đã bị khóa' });
+    }
+
+    res.json({ success: true, user: sanitizeUser(user) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/auth/profile', (req, res) => {
+  try {
+    const { userId, fullName, position, notes } = req.body || {};
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin tài khoản' });
+    }
+
+    const users = loadServerUsers();
+    const userIndex = users.findIndex((u) => u.id === userId);
+
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    }
+
+    users[userIndex].fullName = String(fullName || '').trim();
+    users[userIndex].position = String(position || '').trim();
+    users[userIndex].notes = String(notes || '').trim();
+    users[userIndex].updatedAt = new Date().toISOString();
+
+    saveServerUsers(users);
+
+    res.json({
+      success: true,
+      user: sanitizeUser(users[userIndex]),
+      message: 'Cập nhật thông tin cá nhân thành công',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/auth/change-password', (req, res) => {
+  try {
+    const { userId, currentPassword, newPassword, confirmPassword } = req.body || {};
+
+    if (!userId || !currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Vui lòng điền đầy đủ các trường thông tin' });
+    }
+
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu mới phải có tối thiểu 8 ký tự' });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Xác nhận mật khẩu mới không trùng khớp' });
+    }
+
+    const users = loadServerUsers();
+    const userIndex = users.findIndex((u) => u.id === userId);
+
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+    }
+
+    const user = users[userIndex];
+    const isCurrentValid = bcrypt.compareSync(String(currentPassword), user.passwordHash);
+
+    if (!isCurrentValid) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
+    }
+
+    users[userIndex].passwordHash = bcrypt.hashSync(String(newPassword), 10);
+    users[userIndex].updatedAt = new Date().toISOString();
+
+    saveServerUsers(users);
+
+    res.json({
+      success: true,
+      message: 'Đổi mật khẩu thành công! Vui lòng đăng nhập lại.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/users', (req, res) => {
+  try {
+    const users = loadServerUsers();
+    res.json({
+      success: true,
+      users: users.map(sanitizeUser),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/users', (req, res) => {
+  try {
+    const { username, password, fullName, position, notes, role } = req.body || {};
+
+    if (!username || !password || !fullName || !position) {
+      return res.status(400).json({ success: false, message: 'Vui lòng nhập đầy đủ Tên đăng nhập, Mật khẩu, Họ tên và Chức vụ' });
+    }
+
+    const cleanUsername = String(username).trim().toLowerCase();
+    if (!/^[a-zA-Z0-9_.-]+$/.test(cleanUsername)) {
+      return res.status(400).json({ success: false, message: 'Tên đăng nhập chỉ chứa chữ cái, số, dấu gạch dưới hoặc gạch nối' });
+    }
+
+    if (String(password).length < 8) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu phải từ 8 ký tự trở lên' });
+    }
+
+    const users = loadServerUsers();
+    if (users.some((u) => u.username.toLowerCase() === cleanUsername)) {
+      return res.status(400).json({ success: false, message: 'Tên đăng nhập này đã tồn tại trong hệ thống' });
+    }
+
+    const newUser: ServerUser = {
+      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      username: cleanUsername,
+      passwordHash: bcrypt.hashSync(String(password), 10),
+      fullName: String(fullName).trim(),
+      position: String(position).trim(),
+      notes: notes ? String(notes).trim() : '',
+      role: role === 'admin' ? 'admin' : 'user',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+
+    users.push(newUser);
+    saveServerUsers(users);
+
+    res.json({
+      success: true,
+      user: sanitizeUser(newUser),
+      message: 'Tạo tài khoản mới thành công',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/users/:id/status', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (status !== 'active' && status !== 'locked') {
+      return res.status(400).json({ success: false, message: 'Trạng thái không hợp lệ' });
+    }
+
+    const users = loadServerUsers();
+    const userIndex = users.findIndex((u) => u.id === id);
+
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    }
+
+    users[userIndex].status = status;
+    users[userIndex].updatedAt = new Date().toISOString();
+    saveServerUsers(users);
+
+    res.json({
+      success: true,
+      user: sanitizeUser(users[userIndex]),
+      message: status === 'locked' ? 'Đã khóa tài khoản' : 'Đã mở khóa tài khoản',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/users/:id/reset-password', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || String(newPassword).length < 8) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu mới phải từ 8 ký tự trở lên' });
+    }
+
+    const users = loadServerUsers();
+    const userIndex = users.findIndex((u) => u.id === id);
+
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    }
+
+    users[userIndex].passwordHash = bcrypt.hashSync(String(newPassword), 10);
+    users[userIndex].updatedAt = new Date().toISOString();
+    saveServerUsers(users);
+
+    res.json({
+      success: true,
+      message: 'Đặt lại mật khẩu thành công',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/users/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { fullName, position, notes, role } = req.body;
+
+    const users = loadServerUsers();
+    const userIndex = users.findIndex((u) => u.id === id);
+
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    }
+
+    if (fullName) users[userIndex].fullName = String(fullName).trim();
+    if (position) users[userIndex].position = String(position).trim();
+    if (notes !== undefined) users[userIndex].notes = String(notes).trim();
+    if (role === 'admin' || role === 'user') users[userIndex].role = role;
+
+    users[userIndex].updatedAt = new Date().toISOString();
+    saveServerUsers(users);
+
+    res.json({
+      success: true,
+      user: sanitizeUser(users[userIndex]),
+      message: 'Cập nhật thông tin tài khoản thành công',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/users/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const users = loadServerUsers();
+    const filtered = users.filter((u) => u.id !== id);
+
+    if (filtered.length === users.length) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản để xóa' });
+    }
+
+    saveServerUsers(filtered);
+    res.json({ success: true, message: 'Xóa tài khoản thành công' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // Helper to sanitize database names
 function sanitizeIdentifier(name: string): string {

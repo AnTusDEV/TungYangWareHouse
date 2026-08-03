@@ -95,4 +95,5 @@ export type TabType =
   | 'history'
   | 'reports'
   | 'categories'
+  | 'accounts'
   | 'settings';

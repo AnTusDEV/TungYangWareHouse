@@ -13,9 +13,11 @@ import {
   ShieldCheck,
   ChevronLeft,
   ChevronRight,
+  Users,
   AlertTriangle,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { TabType } from '../../types/inventory';
 
 interface SidebarProps {
@@ -25,6 +27,7 @@ interface SidebarProps {
 
 export function Sidebar({ isCollapsed, setIsCollapsed }: SidebarProps) {
   const { activeTab, setActiveTab, items } = useInventoryStore();
+  const { currentUser } = useAuthStore();
 
   // Out of stock count
   const outOfStockCount = items.filter((item) => item.stockQuantity <= 0).length;
@@ -39,28 +42,32 @@ export function Sidebar({ isCollapsed, setIsCollapsed }: SidebarProps) {
     { id: 'history', label: 'Lịch sử', icon: <History className="h-4 w-4" /> },
     { id: 'reports', label: 'Báo cáo', icon: <BarChart3 className="h-4 w-4" /> },
     { id: 'categories', label: 'Danh mục', icon: <Boxes className="h-4 w-4" /> },
+    ...(currentUser?.role === 'admin'
+      ? [{ id: 'accounts' as TabType, label: 'Tài khoản', icon: <Users className="h-4 w-4 text-purple-400" /> }]
+      : []),
     { id: 'settings', label: 'Cài đặt', icon: <Settings className="h-4 w-4" /> },
   ];
 
   return (
     <aside
-      className={`shrink-0 flex flex-col h-full border-r border-slate-200 dark:border-slate-800 bg-slate-900 text-slate-300 transition-all duration-300 z-30 select-none ${
+      className={`shrink-0 flex flex-col h-full border-r border-amber-950/40 dark:border-slate-800 bg-slate-950 text-slate-300 transition-all duration-300 z-30 select-none ${
         isCollapsed ? 'w-16' : 'w-64'
       }`}
     >
-      {/* App Brand Header */}
-      <div className="flex items-center justify-between h-16 px-4 border-b border-slate-800/80 bg-slate-950/60">
+      {/* App Brand Header - Tung Yang Red Gold Identity */}
+      <div className="flex items-center justify-between h-16 px-4 border-b border-amber-500/20 bg-gradient-to-r from-slate-950 via-red-950/40 to-slate-950">
         {!isCollapsed && (
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="flex items-center justify-center h-9 w-9 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white font-bold shadow-lg shadow-cyan-500/20 shrink-0">
-              <ShieldCheck className="h-5 w-5" />
+            {/* Round Gold & Crimson Logo Emblem */}
+            <div className="flex items-center justify-center h-10 w-10 rounded-full bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-red-900 font-extrabold text-xs shadow-lg shadow-amber-500/30 border-2 border-yellow-200 shrink-0 tracking-tighter">
+              <span className="text-red-900 font-black tracking-tighter">TY</span>
             </div>
             <div className="truncate">
-              <h1 className="text-sm font-bold text-white tracking-wide truncate leading-tight">
-                ERP KHO VP
+              <h1 className="text-sm font-black text-amber-400 tracking-wider truncate leading-tight uppercase">
+                TUNG YANG
               </h1>
-              <p className="text-[10px] text-cyan-400 font-medium tracking-wider uppercase">
-                Quản Lý Kho Doanh Nghiệp
+              <p className="text-[10px] text-red-400 font-bold tracking-widest uppercase">
+                Nhà Máy Nhôm - Quản Lý Kho
               </p>
             </div>
           </div>
@@ -68,8 +75,8 @@ export function Sidebar({ isCollapsed, setIsCollapsed }: SidebarProps) {
 
         {isCollapsed && (
           <div className="flex items-center justify-center w-full">
-            <div className="flex items-center justify-center h-9 w-9 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white font-bold shadow-lg shadow-cyan-500/20">
-              <ShieldCheck className="h-5 w-5" />
+            <div className="flex items-center justify-center h-10 w-10 rounded-full bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-red-900 font-black text-xs shadow-lg shadow-amber-500/30 border-2 border-yellow-200 shrink-0">
+              <span className="text-red-900 font-black tracking-tighter">TY</span>
             </div>
           </div>
         )}
@@ -77,7 +84,7 @@ export function Sidebar({ isCollapsed, setIsCollapsed }: SidebarProps) {
         {/* Toggle Collapse Button */}
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className={`hidden md:flex items-center justify-center h-7 w-7 rounded-lg border border-slate-700 bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors ${
+          className={`hidden md:flex items-center justify-center h-7 w-7 rounded-lg border border-amber-500/30 bg-slate-900 text-amber-400 hover:text-white hover:bg-red-900/60 transition-colors ${
             isCollapsed ? 'mx-auto mt-2' : ''
           }`}
           title={isCollapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
@@ -96,14 +103,14 @@ export function Sidebar({ isCollapsed, setIsCollapsed }: SidebarProps) {
               onClick={() => setActiveTab(item.id)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all relative group ${
                 isActive
-                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-500/15'
-                  : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
+                  ? 'bg-gradient-to-r from-red-700 via-red-600 to-amber-600 text-white shadow-lg shadow-red-700/25 border border-amber-400/30'
+                  : 'text-slate-400 hover:text-amber-300 hover:bg-red-950/40'
               }`}
               title={isCollapsed ? item.label : undefined}
             >
               <div
                 className={`flex items-center justify-center shrink-0 ${
-                  isActive ? 'text-white' : 'text-slate-400 group-hover:text-cyan-400'
+                  isActive ? 'text-amber-300' : 'text-slate-400 group-hover:text-amber-400'
                 }`}
               >
                 {item.icon}
@@ -116,8 +123,8 @@ export function Sidebar({ isCollapsed, setIsCollapsed }: SidebarProps) {
                 <span
                   className={`ml-auto flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
                     isActive
-                      ? 'bg-amber-400 text-slate-950'
-                      : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                      ? 'bg-amber-300 text-red-950'
+                      : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
                   } ${isCollapsed ? 'absolute top-1 right-1' : ''}`}
                 >
                   {item.badge}
