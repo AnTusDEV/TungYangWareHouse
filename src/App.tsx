@@ -15,14 +15,14 @@ import { CategoryUnitManager } from './components/categories/CategoryUnitManager
 import { SettingsView } from './components/settings/SettingsView';
 
 export default function App() {
-  const { activeTab, setActiveTab, theme, fetchFromMySQL } = useInventoryStore();
+  const { activeTab, setActiveTab, theme, fetchFromSQLServer } = useInventoryStore();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // Load real data from MySQL on mount and ensure initial tab is dashboard
+  // Load real data from SQL Server on mount and ensure initial tab is dashboard
   useEffect(() => {
     setActiveTab('dashboard');
-    fetchFromMySQL();
-  }, [fetchFromMySQL, setActiveTab]);
+    fetchFromSQLServer();
+  }, [fetchFromSQLServer, setActiveTab]);
 
   // Sync html element dark class
   useEffect(() => {
