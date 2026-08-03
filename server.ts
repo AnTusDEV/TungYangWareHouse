@@ -100,6 +100,142 @@ function sanitizeUser(u: ServerUser) {
   return safe;
 }
 
+async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: string) {
+  const hashToUse = user.passwordHash || (rawPassword ? bcrypt.hashSync(rawPassword, 10) : undefined);
+
+  // Try MySQL
+  try {
+    const conn = await getMySQLConnection({}, true);
+    if (conn) {
+      if (hashToUse) {
+        await conn.execute(`
+          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE
+            username = VALUES(username),
+            password_hash = VALUES(password_hash),
+            full_name = VALUES(full_name),
+            position = VALUES(position),
+            notes = VALUES(notes),
+            role = VALUES(role),
+            status = VALUES(status),
+            updated_at = NOW();
+        `, [
+          user.id,
+          user.username.toLowerCase(),
+          hashToUse,
+          user.fullName,
+          user.position || '',
+          user.notes || '',
+          user.role || 'user',
+          user.status || 'active',
+        ]);
+      } else {
+        await conn.execute(`
+          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
+          VALUES (?, ?, 'HASH_PLACEHOLDER', ?, ?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE
+            full_name = VALUES(full_name),
+            position = VALUES(position),
+            notes = VALUES(notes),
+            role = VALUES(role),
+            status = VALUES(status),
+            updated_at = NOW();
+        `, [
+          user.id,
+          user.username.toLowerCase(),
+          user.fullName,
+          user.position || '',
+          user.notes || '',
+          user.role || 'user',
+          user.status || 'active',
+        ]);
+      }
+      await conn.end();
+    }
+  } catch (e) {}
+
+  // Try MSSQL
+  try {
+    const pool = await getMSSQLPool({}, true);
+    if (pool) {
+      const request = pool.request();
+      request.input('id', mssql.VarChar(50), user.id);
+      request.input('username', mssql.VarChar(50), user.username.toLowerCase());
+      request.input('full_name', mssql.NVarChar(255), user.fullName);
+      request.input('position', mssql.NVarChar(255), user.position || '');
+      request.input('notes', mssql.NVarChar(mssql.MAX), user.notes || '');
+      request.input('role', mssql.VarChar(20), user.role || 'user');
+      request.input('status', mssql.VarChar(20), user.status || 'active');
+
+      if (hashToUse) {
+        request.input('password_hash', mssql.NVarChar(255), hashToUse);
+        await request.query(`
+          IF EXISTS (SELECT 1 FROM users WHERE id = @id)
+          BEGIN
+            UPDATE users SET
+              username = @username,
+              password_hash = @password_hash,
+              full_name = @full_name,
+              position = @position,
+              notes = @notes,
+              role = @role,
+              status = @status,
+              updated_at = GETDATE()
+            WHERE id = @id;
+          END
+          ELSE
+          BEGIN
+            INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
+            VALUES (@id, @username, @password_hash, @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+          END
+        `);
+      } else {
+        await request.query(`
+          IF EXISTS (SELECT 1 FROM users WHERE id = @id)
+          BEGIN
+            UPDATE users SET
+              username = @username,
+              full_name = @full_name,
+              position = @position,
+              notes = @notes,
+              role = @role,
+              status = @status,
+              updated_at = GETDATE()
+            WHERE id = @id;
+          END
+          ELSE
+          BEGIN
+            INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
+            VALUES (@id, @username, N'HASH_PLACEHOLDER', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+          END
+        `);
+      }
+      await pool.close();
+    }
+  } catch (e) {}
+}
+
+async function syncDeleteUserFromDatabasesOnServer(userId: string) {
+  try {
+    const conn = await getMySQLConnection({}, true);
+    if (conn) {
+      await conn.execute('DELETE FROM users WHERE id = ?', [userId]);
+      await conn.end();
+    }
+  } catch (e) {}
+
+  try {
+    const pool = await getMSSQLPool({}, true);
+    if (pool) {
+      const request = pool.request();
+      request.input('id', mssql.VarChar(50), userId);
+      await request.query('DELETE FROM users WHERE id = @id');
+      await pool.close();
+    }
+  } catch (e) {}
+}
+
 // --- AUTH API ROUTES ---
 app.post('/api/auth/login', (req, res) => {
   try {
@@ -240,9 +376,56 @@ app.put('/api/auth/change-password', (req, res) => {
   }
 });
 
-app.get('/api/users', (req, res) => {
+app.get('/api/users', async (req, res) => {
   try {
-    const users = loadServerUsers();
+    let users = loadServerUsers();
+
+    try {
+      const conn = await getMySQLConnection({}, true);
+      if (conn) {
+        const [uRows]: any = await conn.query('SELECT * FROM users');
+        await conn.end();
+        if (uRows && uRows.length > 0) {
+          users = uRows.map((row: any) => ({
+            id: String(row.id),
+            username: String(row.username),
+            passwordHash: String(row.password_hash || ''),
+            fullName: String(row.full_name || row.fullName || ''),
+            position: String(row.position || ''),
+            notes: String(row.notes || ''),
+            role: row.role === 'admin' ? 'admin' : 'user',
+            status: row.status === 'locked' ? 'locked' : 'active',
+            createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+            updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+          }));
+          saveServerUsers(users);
+        }
+      }
+    } catch (e) {
+      try {
+        const pool = await getMSSQLPool({}, true);
+        if (pool) {
+          const uRes = await pool.request().query('SELECT * FROM users');
+          await pool.close();
+          if (uRes.recordset && uRes.recordset.length > 0) {
+            users = uRes.recordset.map((row: any) => ({
+              id: String(row.id),
+              username: String(row.username),
+              passwordHash: String(row.password_hash || ''),
+              fullName: String(row.full_name || row.fullName || ''),
+              position: String(row.position || ''),
+              notes: String(row.notes || ''),
+              role: row.role === 'admin' ? 'admin' : 'user',
+              status: row.status === 'locked' ? 'locked' : 'active',
+              createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+              updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+            }));
+            saveServerUsers(users);
+          }
+        }
+      } catch (e2) {}
+    }
+
     res.json({
       success: true,
       users: users.map(sanitizeUser),
@@ -252,7 +435,7 @@ app.get('/api/users', (req, res) => {
   }
 });
 
-app.post('/api/users', (req, res) => {
+app.post('/api/users', async (req, res) => {
   try {
     const { username, password, fullName, position, notes, role } = req.body || {};
 
@@ -288,6 +471,7 @@ app.post('/api/users', (req, res) => {
 
     users.push(newUser);
     saveServerUsers(users);
+    syncUserToDatabasesOnServer(newUser, String(password)).catch(() => {});
 
     res.json({
       success: true,
@@ -299,7 +483,7 @@ app.post('/api/users', (req, res) => {
   }
 });
 
-app.put('/api/users/:id/status', (req, res) => {
+app.put('/api/users/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -318,6 +502,7 @@ app.put('/api/users/:id/status', (req, res) => {
     users[userIndex].status = status;
     users[userIndex].updatedAt = new Date().toISOString();
     saveServerUsers(users);
+    syncUserToDatabasesOnServer(users[userIndex]).catch(() => {});
 
     res.json({
       success: true,
@@ -329,7 +514,7 @@ app.put('/api/users/:id/status', (req, res) => {
   }
 });
 
-app.put('/api/users/:id/reset-password', (req, res) => {
+app.put('/api/users/:id/reset-password', async (req, res) => {
   try {
     const { id } = req.params;
     const { newPassword } = req.body;
@@ -348,6 +533,7 @@ app.put('/api/users/:id/reset-password', (req, res) => {
     users[userIndex].passwordHash = bcrypt.hashSync(String(newPassword), 10);
     users[userIndex].updatedAt = new Date().toISOString();
     saveServerUsers(users);
+    syncUserToDatabasesOnServer(users[userIndex], String(newPassword)).catch(() => {});
 
     res.json({
       success: true,
@@ -358,7 +544,7 @@ app.put('/api/users/:id/reset-password', (req, res) => {
   }
 });
 
-app.put('/api/users/:id', (req, res) => {
+app.put('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { fullName, position, notes, role } = req.body;
@@ -377,6 +563,7 @@ app.put('/api/users/:id', (req, res) => {
 
     users[userIndex].updatedAt = new Date().toISOString();
     saveServerUsers(users);
+    syncUserToDatabasesOnServer(users[userIndex]).catch(() => {});
 
     res.json({
       success: true,
@@ -388,7 +575,7 @@ app.put('/api/users/:id', (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', (req, res) => {
+app.delete('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const users = loadServerUsers();
@@ -399,6 +586,8 @@ app.delete('/api/users/:id', (req, res) => {
     }
 
     saveServerUsers(filtered);
+    syncDeleteUserFromDatabasesOnServer(id).catch(() => {});
+
     res.json({ success: true, message: 'Xóa tài khoản thành công' });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });

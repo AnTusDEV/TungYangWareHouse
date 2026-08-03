@@ -26,24 +26,16 @@ import { saveUserToMySQL, deleteUserFromMySQL } from '../lib/mysqlSync';
 function syncUserToDB(user: User, passwordHash?: string) {
   try {
     const invState = useInventoryStore.getState();
-    if (invState.isSQLServerConnected) {
-      saveUserToSQLServer(invState.sqlServerConfig, user, passwordHash);
-    }
-    if (invState.isMySQLConnected) {
-      saveUserToMySQL(invState.mysqlConfig, user, passwordHash);
-    }
+    saveUserToSQLServer(invState.sqlServerConfig, user, passwordHash);
+    saveUserToMySQL(invState.mysqlConfig, user, passwordHash);
   } catch (e) {}
 }
 
 function syncDeleteUserFromDB(userId: string) {
   try {
     const invState = useInventoryStore.getState();
-    if (invState.isSQLServerConnected) {
-      deleteUserFromSQLServer(invState.sqlServerConfig, userId);
-    }
-    if (invState.isMySQLConnected) {
-      deleteUserFromMySQL(invState.mysqlConfig, userId);
-    }
+    deleteUserFromSQLServer(invState.sqlServerConfig, userId);
+    deleteUserFromMySQL(invState.mysqlConfig, userId);
   } catch (e) {}
 }
 
@@ -182,12 +174,11 @@ export const useAuthStore = create<AuthState>()(
       createUser: async (data) => {
         set({ isLoading: true, authError: null });
         try {
-          await apiCreateUser(data);
+          const createdUser = await apiCreateUser(data);
+          const bcrypt = (await import('bcryptjs')).default;
+          const passwordHash = bcrypt.hashSync(data.password, 10);
+          syncUserToDB(createdUser, passwordHash);
           await get().fetchUsers();
-          const newUser = get().usersList.find((u) => u.username.toLowerCase() === data.username.toLowerCase());
-          if (newUser) {
-            syncUserToDB(newUser);
-          }
           set({ isLoading: false });
           return true;
         } catch (err: any) {
