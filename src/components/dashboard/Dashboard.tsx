@@ -114,7 +114,7 @@ export function Dashboard() {
         </div>
 
         {/* Date Filter Controls */}
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        {/* <div className="flex items-center gap-2 self-start sm:self-auto">
           <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700 text-xs">
             <Calendar className="h-3.5 w-3.5 text-slate-400 ml-2" />
             <select
@@ -135,7 +135,7 @@ export function Dashboard() {
             <Zap className="h-3.5 w-3.5" />
             <span>Tạo Phiếu Mới</span>
           </button>
-        </div>
+        </div> */}
       </div>
 
       {/* KPI Cards Row - Matching Image Style (Large bold number + Versus label) */}
