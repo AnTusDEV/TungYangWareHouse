@@ -191,17 +191,40 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
       createdAt: row.created_at,
     }));
 
-    const users: User[] = (data.users || []).map((row: any) => ({
-      id: row.id,
-      username: row.username,
-      fullName: row.full_name || row.fullName || '',
-      position: row.position || '',
-      notes: row.notes || '',
-      role: row.role as 'admin' | 'user',
-      status: row.status as 'active' | 'locked',
-      createdAt: row.created_at || row.createdAt || new Date().toISOString(),
-      updatedAt: row.updated_at || row.updatedAt,
-    }));
+    const users: User[] = (data.users || []).map((row: any) => {
+      const getProp = (candidates: string[], fallback = '') => {
+        for (const c of candidates) {
+          if (row[c] !== undefined && row[c] !== null) return String(row[c]);
+          const keyInsensitive = Object.keys(row).find((k) => k.toLowerCase() === c.toLowerCase());
+          if (keyInsensitive && row[keyInsensitive] !== undefined && row[keyInsensitive] !== null) {
+            return String(row[keyInsensitive]);
+          }
+        }
+        return fallback;
+      };
+
+      const id = getProp(['id', 'userId', 'user_id', 'usr_id'], 'usr_' + Math.random().toString(36).substring(2, 6));
+      const username = getProp(['username', 'userName', 'user_name'], 'user');
+      const fullName = getProp(['fullName', 'full_name', 'name', 'ten_nguoi_dung'], username);
+      const position = getProp(['position', 'chuc_vu', 'chucVu'], '');
+      const notes = getProp(['notes', 'ghi_chu', 'ghiChu', 'note'], '');
+      const roleRaw = getProp(['role', 'role_name', 'quyen'], 'user').toLowerCase();
+      const statusRaw = getProp(['status', 'trang_thai', 'trangThai'], 'active').toLowerCase();
+      const createdAt = getProp(['createdAt', 'created_at', 'createdDate', 'created_date'], new Date().toISOString());
+      const updatedAt = getProp(['updatedAt', 'updated_at', 'updatedDate'], undefined);
+
+      return {
+        id,
+        username,
+        fullName,
+        position,
+        notes,
+        role: roleRaw === 'admin' ? 'admin' : 'user',
+        status: statusRaw === 'locked' ? 'locked' : 'active',
+        createdAt,
+        updatedAt: updatedAt || undefined,
+      };
+    });
 
     return {
       success: true,

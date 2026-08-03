@@ -658,9 +658,11 @@ app.post('/api/mysql/fetch-all', async (req, res) => {
     const [logsRows] = await conn.query('SELECT * FROM inventory_logs ORDER BY created_at DESC');
     let usersRows: any[] = [];
     try {
-      const [uRows]: any = await conn.query('SELECT * FROM users ORDER BY created_at ASC');
+      const [uRows]: any = await conn.query('SELECT * FROM users');
       usersRows = uRows || [];
-    } catch (_) {}
+    } catch (err) {
+      console.error('Error fetching users from MySQL:', err);
+    }
 
     await conn.end();
 
@@ -1242,9 +1244,11 @@ app.post('/api/mssql/fetch-all', async (req, res) => {
     const logsRes = await pool.request().query('SELECT * FROM inventory_logs ORDER BY created_at DESC');
     let usersRecordset: any[] = [];
     try {
-      const usersRes = await pool.request().query('SELECT * FROM users ORDER BY created_at ASC');
+      const usersRes = await pool.request().query('SELECT * FROM users');
       usersRecordset = usersRes.recordset || [];
-    } catch (_) {}
+    } catch (err) {
+      console.error('Error fetching users from MSSQL:', err);
+    }
 
     await pool.close();
 

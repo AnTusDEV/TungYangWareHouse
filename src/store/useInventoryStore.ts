@@ -613,7 +613,7 @@ export const useInventoryStore = create<InventoryState>()(
             isSQLServerConnected: true,
             isLoadingFromSQLServer: false,
           });
-          if (res.users && res.users.length > 0) {
+          if (res.users && Array.isArray(res.users)) {
             useAuthStore.setState({ usersList: res.users });
             saveStoredLocalUsers(res.users);
           }
@@ -697,7 +697,7 @@ export const useInventoryStore = create<InventoryState>()(
             isMySQLConnected: true,
             isLoadingFromMySQL: false,
           });
-          if (res.users && res.users.length > 0) {
+          if (res.users && Array.isArray(res.users)) {
             useAuthStore.setState({ usersList: res.users });
             saveStoredLocalUsers(res.users);
           }
