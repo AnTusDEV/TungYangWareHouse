@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import mysql from 'mysql2/promise';
+import mssql from 'mssql';
 import { createServer as createViteServer } from 'vite';
 
 const app = express();
@@ -548,6 +549,612 @@ app.post('/api/mysql/save-voucher', async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     if (conn) { try { await conn.end(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// SQL SERVER (MSSQL) ENDPOINTS
+// ==========================================
+
+async function getMSSQLPool(config: any, includeDatabase = true) {
+  const host = config?.host || process.env.MSSQL_HOST || 'SERVER_LAN';
+  const port = Number(config?.port || process.env.MSSQL_PORT || 1433);
+  const user = config?.user || process.env.MSSQL_USER || 'antu';
+  const password = config?.password !== undefined ? config.password : (process.env.MSSQL_PASSWORD || 'Ty2025@@');
+  const database = config?.database || process.env.MSSQL_DATABASE || 'inventory_db';
+  const encrypt = config?.encrypt === true;
+
+  const mssqlConfig: mssql.config = {
+    server: host,
+    port,
+    user,
+    password,
+    options: {
+      encrypt,
+      trustServerCertificate: true,
+      enableArithAbort: true,
+    },
+    connectionTimeout: 10000,
+    requestTimeout: 15000,
+  };
+
+  if (includeDatabase && database) {
+    mssqlConfig.database = database;
+  }
+
+  const pool = new mssql.ConnectionPool(mssqlConfig);
+  await pool.connect();
+  return pool;
+}
+
+// 1. Test SQL Server Connection
+app.post('/api/mssql/test', async (req, res) => {
+  let pool;
+  try {
+    const config = req.body;
+    pool = await getMSSQLPool(config, false);
+    await pool.request().query('SELECT 1');
+
+    const dbName = sanitizeIdentifier(config?.database || 'inventory_db');
+    if (dbName) {
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = N'${dbName}')
+        BEGIN
+          CREATE DATABASE [${dbName}];
+        END
+      `);
+    }
+    await pool.close();
+
+    pool = await getMSSQLPool(config, true);
+    await pool.request().query('SELECT 1');
+    await pool.close();
+
+    res.json({
+      success: true,
+      message: `Kết nối thành công tới SQL Server (${config.host || 'SERVER_LAN'}:${config.port || 1433}) - CSDL: ${config.database || 'inventory_db'}`,
+    });
+  } catch (err: any) {
+    if (pool) {
+      try { await pool.close(); } catch (_) {}
+    }
+    console.error('SQL Server Test Connection Error:', err);
+    res.status(400).json({
+      success: false,
+      message: err.message || 'Không thể kết nối tới SQL Server',
+      code: err.code,
+    });
+  }
+});
+
+// 2. Initialize SQL Server Tables
+app.post('/api/mssql/init-tables', async (req, res) => {
+  let pool;
+  try {
+    const config = req.body;
+    const dbName = sanitizeIdentifier(config?.database || 'inventory_db');
+    pool = await getMSSQLPool(config, false);
+
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = N'${dbName}')
+      BEGIN
+        CREATE DATABASE [${dbName}];
+      END
+    `);
+    await pool.close();
+
+    pool = await getMSSQLPool(config, true);
+
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'categories')
+      CREATE TABLE categories (
+        id VARCHAR(50) PRIMARY KEY,
+        code VARCHAR(50) NOT NULL,
+        name NVARCHAR(255) NOT NULL,
+        description NVARCHAR(MAX),
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE()
+      );
+
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'warehouses')
+      CREATE TABLE warehouses (
+        id VARCHAR(50) PRIMARY KEY,
+        code VARCHAR(50) NOT NULL,
+        name NVARCHAR(255) NOT NULL,
+        location NVARCHAR(MAX),
+        manager NVARCHAR(255),
+        description NVARCHAR(MAX),
+        is_default BIT DEFAULT 0,
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE()
+      );
+
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'units')
+      CREATE TABLE units (
+        id VARCHAR(50) PRIMARY KEY,
+        name NVARCHAR(255) NOT NULL,
+        description NVARCHAR(MAX),
+        created_at DATETIME DEFAULT GETDATE()
+      );
+
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'items')
+      CREATE TABLE items (
+        id VARCHAR(50) PRIMARY KEY,
+        code VARCHAR(50) NOT NULL,
+        name NVARCHAR(255) NOT NULL,
+        category_id VARCHAR(50),
+        category_name NVARCHAR(255),
+        unit_id VARCHAR(50),
+        unit_name NVARCHAR(255),
+        warehouse_id VARCHAR(50),
+        warehouse_name NVARCHAR(255),
+        stock_quantity INT DEFAULT 0,
+        min_stock_level INT DEFAULT 0,
+        max_stock_level INT DEFAULT 100,
+        note NVARCHAR(MAX),
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE()
+      );
+
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'stock_vouchers')
+      CREATE TABLE stock_vouchers (
+        id VARCHAR(50) PRIMARY KEY,
+        code VARCHAR(50) NOT NULL,
+        type VARCHAR(10) NOT NULL,
+        date VARCHAR(20) NOT NULL,
+        person NVARCHAR(255),
+        department NVARCHAR(255),
+        warehouse_id VARCHAR(50),
+        warehouse_name NVARCHAR(255),
+        note NVARCHAR(MAX),
+        total_quantity INT DEFAULT 0,
+        created_at DATETIME DEFAULT GETDATE()
+      );
+
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'stock_voucher_items')
+      CREATE TABLE stock_voucher_items (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        voucher_id VARCHAR(50) NOT NULL,
+        item_id VARCHAR(50) NOT NULL,
+        item_code VARCHAR(50),
+        item_name NVARCHAR(255),
+        unit_name NVARCHAR(255),
+        quantity INT DEFAULT 0,
+        current_stock INT DEFAULT 0
+      );
+
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'inventory_logs')
+      CREATE TABLE inventory_logs (
+        id VARCHAR(50) PRIMARY KEY,
+        voucher_id VARCHAR(50) NOT NULL,
+        voucher_code VARCHAR(50) NOT NULL,
+        type VARCHAR(10) NOT NULL,
+        date VARCHAR(20) NOT NULL,
+        item_id VARCHAR(50) NOT NULL,
+        item_code VARCHAR(50),
+        item_name NVARCHAR(255),
+        category_name NVARCHAR(255),
+        warehouse_id VARCHAR(50),
+        warehouse_name NVARCHAR(255),
+        quantity INT DEFAULT 0,
+        previous_stock INT DEFAULT 0,
+        new_stock INT DEFAULT 0,
+        person NVARCHAR(255),
+        department NVARCHAR(255),
+        note NVARCHAR(MAX),
+        created_at DATETIME DEFAULT GETDATE()
+      );
+    `);
+
+    await pool.close();
+
+    res.json({
+      success: true,
+      message: `Khởi tạo bảng SQL Server thành công trong CSDL '${dbName}'!`,
+    });
+  } catch (err: any) {
+    if (pool) {
+      try { await pool.close(); } catch (_) {}
+    }
+    console.error('SQL Server Init Tables Error:', err);
+    res.status(400).json({
+      success: false,
+      message: err.message || 'Không thể khởi tạo bảng trên SQL Server',
+    });
+  }
+});
+
+// 3. Fetch All Data SQL Server
+app.post('/api/mssql/fetch-all', async (req, res) => {
+  let pool;
+  try {
+    const config = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const itemsRes = await pool.request().query('SELECT * FROM items ORDER BY updated_at DESC');
+    const catsRes = await pool.request().query('SELECT * FROM categories ORDER BY created_at ASC');
+    const whsRes = await pool.request().query('SELECT * FROM warehouses ORDER BY created_at ASC');
+    const unitsRes = await pool.request().query('SELECT * FROM units ORDER BY created_at ASC');
+    const vouchersRes = await pool.request().query('SELECT * FROM stock_vouchers ORDER BY created_at DESC');
+    const voucherItemsRes = await pool.request().query('SELECT * FROM stock_voucher_items');
+    const logsRes = await pool.request().query('SELECT * FROM inventory_logs ORDER BY created_at DESC');
+
+    await pool.close();
+
+    res.json({
+      success: true,
+      items: itemsRes.recordset,
+      categories: catsRes.recordset,
+      warehouses: whsRes.recordset,
+      units: unitsRes.recordset,
+      vouchers: vouchersRes.recordset,
+      voucherItems: voucherItemsRes.recordset,
+      logs: logsRes.recordset,
+    });
+  } catch (err: any) {
+    if (pool) {
+      try { await pool.close(); } catch (_) {}
+    }
+    console.error('SQL Server Fetch All Error:', err);
+    res.status(400).json({
+      success: false,
+      message: err.message || 'Lỗi khi tải dữ liệu từ SQL Server',
+    });
+  }
+});
+
+// 4. Save Item SQL Server
+app.post('/api/mssql/save-item', async (req, res) => {
+  let pool;
+  try {
+    const { config, item } = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), item.id);
+    request.input('code', mssql.VarChar(50), item.code);
+    request.input('name', mssql.NVarChar(255), item.name);
+    request.input('category_id', mssql.VarChar(50), item.categoryId || '');
+    request.input('category_name', mssql.NVarChar(255), item.categoryName || '');
+    request.input('unit_id', mssql.VarChar(50), item.unitId || '');
+    request.input('unit_name', mssql.NVarChar(255), item.unitName || '');
+    request.input('warehouse_id', mssql.VarChar(50), item.warehouseId || '');
+    request.input('warehouse_name', mssql.NVarChar(255), item.warehouseName || '');
+    request.input('stock_quantity', mssql.Int, item.stockQuantity || 0);
+    request.input('min_stock_level', mssql.Int, item.minStockLevel || 0);
+    request.input('max_stock_level', mssql.Int, item.maxStockLevel || 100);
+    request.input('note', mssql.NVarChar(mssql.MAX), item.note || '');
+
+    await request.query(`
+      IF EXISTS (SELECT 1 FROM items WHERE id = @id)
+      BEGIN
+        UPDATE items SET
+          code = @code,
+          name = @name,
+          category_id = @category_id,
+          category_name = @category_name,
+          unit_id = @unit_id,
+          unit_name = @unit_name,
+          warehouse_id = @warehouse_id,
+          warehouse_name = @warehouse_name,
+          stock_quantity = @stock_quantity,
+          min_stock_level = @min_stock_level,
+          max_stock_level = @max_stock_level,
+          note = @note,
+          updated_at = GETDATE()
+        WHERE id = @id;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO items (id, code, name, category_id, category_name, unit_id, unit_name, warehouse_id, warehouse_name, stock_quantity, min_stock_level, max_stock_level, note, created_at, updated_at)
+        VALUES (@id, @code, @name, @category_id, @category_name, @unit_id, @unit_name, @warehouse_id, @warehouse_name, @stock_quantity, @min_stock_level, @max_stock_level, @note, GETDATE(), GETDATE());
+      END
+    `);
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 5. Delete Item SQL Server
+app.post('/api/mssql/delete-item', async (req, res) => {
+  let pool;
+  try {
+    const { config, id } = req.body;
+    pool = await getMSSQLPool(config, true);
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), id);
+    await request.query('DELETE FROM items WHERE id = @id');
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 6. Save Warehouse SQL Server
+app.post('/api/mssql/save-warehouse', async (req, res) => {
+  let pool;
+  try {
+    const { config, warehouse } = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), warehouse.id);
+    request.input('code', mssql.VarChar(50), warehouse.code);
+    request.input('name', mssql.NVarChar(255), warehouse.name);
+    request.input('location', mssql.NVarChar(mssql.MAX), warehouse.location || '');
+    request.input('manager', mssql.NVarChar(255), warehouse.manager || '');
+    request.input('description', mssql.NVarChar(mssql.MAX), warehouse.description || '');
+    request.input('is_default', mssql.Bit, warehouse.isDefault ? 1 : 0);
+
+    await request.query(`
+      IF EXISTS (SELECT 1 FROM warehouses WHERE id = @id)
+      BEGIN
+        UPDATE warehouses SET
+          code = @code,
+          name = @name,
+          location = @location,
+          manager = @manager,
+          description = @description,
+          is_default = @is_default,
+          updated_at = GETDATE()
+        WHERE id = @id;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO warehouses (id, code, name, location, manager, description, is_default, created_at, updated_at)
+        VALUES (@id, @code, @name, @location, @manager, @description, @is_default, GETDATE(), GETDATE());
+      END
+    `);
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 7. Delete Warehouse SQL Server
+app.post('/api/mssql/delete-warehouse', async (req, res) => {
+  let pool;
+  try {
+    const { config, id } = req.body;
+    pool = await getMSSQLPool(config, true);
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), id);
+    await request.query('DELETE FROM warehouses WHERE id = @id');
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 8. Save Category SQL Server
+app.post('/api/mssql/save-category', async (req, res) => {
+  let pool;
+  try {
+    const { config, category } = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), category.id);
+    request.input('code', mssql.VarChar(50), category.code);
+    request.input('name', mssql.NVarChar(255), category.name);
+    request.input('description', mssql.NVarChar(mssql.MAX), category.description || '');
+
+    await request.query(`
+      IF EXISTS (SELECT 1 FROM categories WHERE id = @id)
+      BEGIN
+        UPDATE categories SET
+          code = @code,
+          name = @name,
+          description = @description,
+          updated_at = GETDATE()
+        WHERE id = @id;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO categories (id, code, name, description, created_at, updated_at)
+        VALUES (@id, @code, @name, @description, GETDATE(), GETDATE());
+      END
+    `);
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 9. Delete Category SQL Server
+app.post('/api/mssql/delete-category', async (req, res) => {
+  let pool;
+  try {
+    const { config, id } = req.body;
+    pool = await getMSSQLPool(config, true);
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), id);
+    await request.query('DELETE FROM categories WHERE id = @id');
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 10. Save Unit SQL Server
+app.post('/api/mssql/save-unit', async (req, res) => {
+  let pool;
+  try {
+    const { config, unit } = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), unit.id);
+    request.input('name', mssql.NVarChar(255), unit.name);
+    request.input('description', mssql.NVarChar(mssql.MAX), unit.description || '');
+
+    await request.query(`
+      IF EXISTS (SELECT 1 FROM units WHERE id = @id)
+      BEGIN
+        UPDATE units SET
+          name = @name,
+          description = @description
+        WHERE id = @id;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO units (id, name, description, created_at)
+        VALUES (@id, @name, @description, GETDATE());
+      END
+    `);
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 11. Delete Unit SQL Server
+app.post('/api/mssql/delete-unit', async (req, res) => {
+  let pool;
+  try {
+    const { config, id } = req.body;
+    pool = await getMSSQLPool(config, true);
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), id);
+    await request.query('DELETE FROM units WHERE id = @id');
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 12. Save Voucher & Items & Logs SQL Server
+app.post('/api/mssql/save-voucher', async (req, res) => {
+  let pool;
+  try {
+    const { config, voucher, logs, updatedItems } = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const reqV = pool.request();
+    reqV.input('id', mssql.VarChar(50), voucher.id);
+    reqV.input('code', mssql.VarChar(50), voucher.code);
+    reqV.input('type', mssql.VarChar(10), voucher.type);
+    reqV.input('date', mssql.VarChar(20), voucher.date);
+    reqV.input('person', mssql.NVarChar(255), voucher.person || '');
+    reqV.input('department', mssql.NVarChar(255), voucher.department || '');
+    reqV.input('warehouse_id', mssql.VarChar(50), voucher.warehouseId || '');
+    reqV.input('warehouse_name', mssql.NVarChar(255), voucher.warehouseName || '');
+    reqV.input('note', mssql.NVarChar(mssql.MAX), voucher.note || '');
+    reqV.input('total_quantity', mssql.Int, voucher.totalQuantity || 0);
+
+    await reqV.query(`
+      IF EXISTS (SELECT 1 FROM stock_vouchers WHERE id = @id)
+      BEGIN
+        UPDATE stock_vouchers SET
+          code = @code,
+          type = @type,
+          date = @date,
+          person = @person,
+          department = @department,
+          warehouse_id = @warehouse_id,
+          warehouse_name = @warehouse_name,
+          note = @note,
+          total_quantity = @total_quantity
+        WHERE id = @id;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO stock_vouchers (id, code, type, date, person, department, warehouse_id, warehouse_name, note, total_quantity, created_at)
+        VALUES (@id, @code, @type, @date, @person, @department, @warehouse_id, @warehouse_name, @note, @total_quantity, GETDATE());
+      END
+    `);
+
+    for (const vi of voucher.items || []) {
+      const reqItem = pool.request();
+      reqItem.input('voucher_id', mssql.VarChar(50), voucher.id);
+      reqItem.input('item_id', mssql.VarChar(50), vi.itemId);
+      reqItem.input('item_code', mssql.VarChar(50), vi.itemCode || '');
+      reqItem.input('item_name', mssql.NVarChar(255), vi.itemName || '');
+      reqItem.input('unit_name', mssql.NVarChar(255), vi.unitName || '');
+      reqItem.input('quantity', mssql.Int, vi.quantity || 0);
+      reqItem.input('current_stock', mssql.Int, vi.currentStock || 0);
+
+      await reqItem.query(`
+        INSERT INTO stock_voucher_items (voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
+        VALUES (@voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+      `);
+    }
+
+    for (const log of logs || []) {
+      const reqLog = pool.request();
+      reqLog.input('id', mssql.VarChar(50), log.id);
+      reqLog.input('voucher_id', mssql.VarChar(50), log.voucherId);
+      reqLog.input('voucher_code', mssql.VarChar(50), log.voucherCode);
+      reqLog.input('type', mssql.VarChar(10), log.type);
+      reqLog.input('date', mssql.VarChar(20), log.date);
+      reqLog.input('item_id', mssql.VarChar(50), log.itemId);
+      reqLog.input('item_code', mssql.VarChar(50), log.itemCode || '');
+      reqLog.input('item_name', mssql.NVarChar(255), log.itemName || '');
+      reqLog.input('category_name', mssql.NVarChar(255), log.categoryName || '');
+      reqLog.input('warehouse_id', mssql.VarChar(50), log.warehouseId || '');
+      reqLog.input('warehouse_name', mssql.NVarChar(255), log.warehouseName || '');
+      reqLog.input('quantity', mssql.Int, log.quantity || 0);
+      reqLog.input('previous_stock', mssql.Int, log.previousStock || 0);
+      reqLog.input('new_stock', mssql.Int, log.newStock || 0);
+      reqLog.input('person', mssql.NVarChar(255), log.person || '');
+      reqLog.input('department', mssql.NVarChar(255), log.department || '');
+      reqLog.input('note', mssql.NVarChar(mssql.MAX), log.note || '');
+
+      await reqLog.query(`
+        IF EXISTS (SELECT 1 FROM inventory_logs WHERE id = @id)
+        BEGIN
+          UPDATE inventory_logs SET
+            quantity = @quantity,
+            previous_stock = @previous_stock,
+            new_stock = @new_stock
+          WHERE id = @id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO inventory_logs (id, voucher_id, voucher_code, type, date, item_id, item_code, item_name, category_name, warehouse_id, warehouse_name, quantity, previous_stock, new_stock, person, department, note, created_at)
+          VALUES (@id, @voucher_id, @voucher_code, @type, @date, @item_id, @item_code, @item_name, @category_name, @warehouse_id, @warehouse_name, @quantity, @previous_stock, @new_stock, @person, @department, @note, GETDATE());
+        END
+      `);
+    }
+
+    for (const item of updatedItems || []) {
+      const reqStock = pool.request();
+      reqStock.input('id', mssql.VarChar(50), item.id);
+      reqStock.input('stock_quantity', mssql.Int, item.stockQuantity || 0);
+
+      await reqStock.query(`
+        UPDATE items
+        SET stock_quantity = @stock_quantity, updated_at = GETDATE()
+        WHERE id = @id;
+      `);
+    }
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
     res.status(400).json({ success: false, message: err.message });
   }
 });

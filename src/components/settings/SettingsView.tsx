@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { downloadImportTemplate } from '../../lib/excel';
-import { MySQLConfig } from '../../lib/mysqlSync';
+import { SQLServerConfig } from '../../lib/sqlServerSync';
 
 export function SettingsView() {
   const {
@@ -30,15 +30,15 @@ export function SettingsView() {
     changeAdminPassword,
     lockSettings,
 
-    // MySQL Store State & Actions
-    mysqlConfig,
-    setMysqlConfig,
-    isMySQLConnected,
-    isLoadingFromMySQL,
-    mysqlError,
-    fetchFromMySQL,
-    testMySQLConfig,
-    initMySQLDb,
+    // SQL Server Store State & Actions
+    sqlServerConfig,
+    setSqlServerConfig,
+    isSQLServerConnected,
+    isLoadingFromSQLServer,
+    sqlServerError,
+    fetchFromSQLServer,
+    testSQLServerConfig,
+    initSQLServerDb,
 
     // General store actions
     resetToMockData,
@@ -53,8 +53,8 @@ export function SettingsView() {
   const [showPassword, setShowPassword] = useState(false);
   const [unlockError, setUnlockError] = useState('');
 
-  // MySQL Form State
-  const [formConfig, setFormConfig] = useState<MySQLConfig>({ ...mysqlConfig });
+  // SQL Server Form State
+  const [formConfig, setFormConfig] = useState<SQLServerConfig>({ ...sqlServerConfig });
   const [showDbPassword, setShowDbPassword] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -83,18 +83,18 @@ export function SettingsView() {
     }
   };
 
-  // Handle MySQL Config Save & Fetch
+  // Handle SQL Server Config Save & Fetch
   const handleSaveAndSync = async () => {
-    setMysqlConfig(formConfig);
-    setTestResult({ success: true, message: 'Đã lưu thông số cấu hình MySQL! Đang tải dữ liệu...' });
-    await fetchFromMySQL();
+    setSqlServerConfig(formConfig);
+    setTestResult({ success: true, message: 'Đã lưu cấu hình SQL Server! Đang tải dữ liệu...' });
+    await fetchFromSQLServer();
   };
 
-  // Handle MySQL Test Connection
+  // Handle SQL Server Test Connection
   const handleTestConnection = async () => {
     setIsTesting(true);
     setTestResult(null);
-    const result = await testMySQLConfig(formConfig);
+    const result = await testSQLServerConfig(formConfig);
     setIsTesting(false);
     setTestResult(result);
   };
@@ -103,7 +103,7 @@ export function SettingsView() {
   const handleInitTables = async () => {
     setIsInitializing(true);
     setTestResult(null);
-    const result = await initMySQLDb(formConfig);
+    const result = await initSQLServerDb(formConfig);
     setIsInitializing(false);
     setTestResult(result);
   };
@@ -199,10 +199,10 @@ export function SettingsView() {
         <div>
           <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <Sliders className="h-5 w-5 text-cyan-500" />
-            Cài Đặt Hệ Thống & Kết Nối MySQL
+            Cài Đặt Hệ Thống & Kết Nối SQL Server
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Cấu hình tham số MySQL server, bảo mật tài khoản & quản lý dữ liệu kho
+            Cấu hình tham số Microsoft SQL Server, bảo mật tài khoản & quản lý dữ liệu kho
           </p>
         </div>
 
@@ -215,28 +215,28 @@ export function SettingsView() {
         </button>
       </div>
 
-      {/* SECTION 1: MySQL Connection Setup */}
+      {/* SECTION 1: SQL Server Connection Setup */}
       <div className="p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-5">
         <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl ${isMySQLConnected ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>
+            <div className={`p-2.5 rounded-xl ${isSQLServerConnected ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>
               <Server className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                  Cấu Hình Kết Nối MySQL Database
+                  Cấu Hình Kết Nối Microsoft SQL Server Database
                 </h3>
                 <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                  isMySQLConnected
+                  isSQLServerConnected
                     ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                     : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
                 }`}>
-                  {isMySQLConnected ? 'MySQL Đã Kết Nối' : 'Chưa Kết Nối MySQL'}
+                  {isSQLServerConnected ? 'SQL Server Đã Kết Nối' : 'Chưa Kết Nối SQL Server'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Điền các tham số máy chủ MySQL của bạn để kết nối lưu trữ dữ liệu tập trung
+                Điền tham số máy chủ Microsoft SQL Server (SERVER_LAN) để lưu trữ và đồng bộ dữ liệu
               </p>
             </div>
           </div>
@@ -256,24 +256,24 @@ export function SettingsView() {
           </div>
         )}
 
-        {mysqlError && !testResult && (
+        {sqlServerError && !testResult && (
           <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
             <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
-            <span>Lỗi kết nối MySQL: {mysqlError}</span>
+            <span>Lỗi kết nối SQL Server: {sqlServerError}</span>
           </div>
         )}
 
-        {/* MySQL Form Inputs */}
+        {/* SQL Server Form Inputs */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Host / Địa chỉ IP Máy chủ MySQL
+              Server Name / Host
             </label>
             <input
               type="text"
               value={formConfig.host}
               onChange={(e) => setFormConfig({ ...formConfig, host: e.target.value })}
-              placeholder="Ví dụ: localhost, 127.0.0.1, mysql.mycompany.com"
+              placeholder="SERVER_LAN"
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
@@ -285,35 +285,35 @@ export function SettingsView() {
             <input
               type="number"
               value={formConfig.port}
-              onChange={(e) => setFormConfig({ ...formConfig, port: Number(e.target.value) || 3306 })}
-              placeholder="3306"
+              onChange={(e) => setFormConfig({ ...formConfig, port: Number(e.target.value) || 1433 })}
+              placeholder="1433"
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Tên Tài Khoản (Username)
+              User Name (SQL Authentication)
             </label>
             <input
               type="text"
               value={formConfig.user}
               onChange={(e) => setFormConfig({ ...formConfig, user: e.target.value })}
-              placeholder="Ví dụ: root"
+              placeholder="antu"
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Mật Khẩu (Password)
+              Password
             </label>
             <div className="relative">
               <input
                 type={showDbPassword ? 'text' : 'password'}
                 value={formConfig.password || ''}
                 onChange={(e) => setFormConfig({ ...formConfig, password: e.target.value })}
-                placeholder="Mật khẩu MySQL"
+                placeholder="Mật khẩu SQL Server"
                 autoComplete="off"
                 data-lpignore="true"
                 className="w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
@@ -330,13 +330,13 @@ export function SettingsView() {
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Tên Cơ Sở Dữ Liệu (Database Name)
+              Database Name
             </label>
             <input
               type="text"
               value={formConfig.database}
               onChange={(e) => setFormConfig({ ...formConfig, database: e.target.value })}
-              placeholder="Ví dụ: inventory_db"
+              placeholder="inventory_db"
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
@@ -345,16 +345,16 @@ export function SettingsView() {
             <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
               <input
                 type="checkbox"
-                checked={formConfig.ssl || false}
-                onChange={(e) => setFormConfig({ ...formConfig, ssl: e.target.checked })}
+                checked={formConfig.encrypt || false}
+                onChange={(e) => setFormConfig({ ...formConfig, encrypt: e.target.checked })}
                 className="w-4 h-4 text-cyan-600 rounded border-slate-300 focus:ring-cyan-500"
               />
-              <span>Sử dụng kết nối bảo mật SSL / TLS</span>
+              <span>Encrypt Connection (Mã hóa SSL/TLS - Optional)</span>
             </label>
           </div>
         </div>
 
-        {/* Action Buttons for MySQL */}
+        {/* Action Buttons for SQL Server */}
         <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
           <button
             type="button"
@@ -363,7 +363,7 @@ export function SettingsView() {
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-white shadow transition-colors"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isTesting ? 'animate-spin' : ''}`} />
-            <span>{isTesting ? 'Đang Thử Kết Nối...' : 'Kiểm Tra Kết Nối MySQL'}</span>
+            <span>{isTesting ? 'Đang Thử Kết Nối...' : 'Kiểm Tra Kết Nối SQL Server'}</span>
           </button>
 
           <button
@@ -373,17 +373,17 @@ export function SettingsView() {
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow transition-colors"
           >
             <HardDrive className={`h-3.5 w-3.5 ${isInitializing ? 'animate-spin' : ''}`} />
-            <span>Khởi Tạo Bảng CSDL</span>
+            <span>Khởi Tạo Bảng CSDL SQL Server</span>
           </button>
 
           <button
             type="button"
             onClick={handleSaveAndSync}
-            disabled={isLoadingFromMySQL}
+            disabled={isLoadingFromSQLServer}
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow transition-colors ml-auto"
           >
             <Save className="h-3.5 w-3.5" />
-            <span>Lưu & Tải Dữ Liệu MySQL</span>
+            <span>Lưu & Tải Dữ Liệu SQL Server</span>
           </button>
         </div>
       </div>
@@ -511,16 +511,16 @@ export function SettingsView() {
                 Xóa Toàn Bộ Dữ Liệu Demo
               </h3>
               <p className="text-xs text-slate-500">
-                Làm sạch bộ nhớ đệm, chỉ tải dữ liệu thực từ MySQL
+                Làm sạch bộ nhớ đệm, chỉ tải dữ liệu thực từ SQL Server
               </p>
             </div>
           </div>
           <div className="flex gap-2">
             <button
               onClick={() => {
-                if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu demo cục bộ? Hệ thống sẽ chỉ hiển thị dữ liệu từ MySQL.')) {
+                if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu demo cục bộ? Hệ thống sẽ chỉ hiển thị dữ liệu từ SQL Server.')) {
                   clearAllDemoData();
-                  fetchFromMySQL();
+                  fetchFromSQLServer();
                 }
               }}
               className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow transition-colors"
@@ -574,7 +574,7 @@ export function SettingsView() {
       <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 text-xs text-slate-500 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Shield className="h-4 w-4 text-cyan-500" />
-          <span>ERP Mini Inventory Management System - MySQL Full-stack Edition</span>
+          <span>ERP Mini Inventory Management System - Microsoft SQL Server Edition</span>
         </div>
         <div className="flex items-center gap-1 text-emerald-500 font-semibold">
           <CheckCircle2 className="h-4 w-4" />

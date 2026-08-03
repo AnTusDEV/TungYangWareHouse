@@ -43,6 +43,23 @@ import {
   deleteUnitFromMySQL,
   saveVoucherToMySQL,
 } from '../lib/mysqlSync';
+import {
+  SQLServerConfig,
+  getStoredSQLServerConfig,
+  saveStoredSQLServerConfig,
+  testSQLServerConnection,
+  initSQLServerTables,
+  fetchAllFromSQLServer,
+  saveItemToSQLServer,
+  deleteItemFromSQLServer,
+  saveWarehouseToSQLServer,
+  deleteWarehouseFromSQLServer,
+  saveCategoryToSQLServer,
+  deleteCategoryFromSQLServer,
+  saveUnitToSQLServer,
+  deleteUnitFromSQLServer,
+  saveVoucherToSQLServer,
+} from '../lib/sqlServerSync';
 
 interface InventoryState {
   // Navigation & Theme
@@ -52,6 +69,16 @@ interface InventoryState {
   toggleTheme: () => void;
   searchTerm: string;
   setSearchTerm: (term: string) => void;
+
+  // SQL Server State
+  sqlServerConfig: SQLServerConfig;
+  setSqlServerConfig: (config: SQLServerConfig) => void;
+  isLoadingFromSQLServer: boolean;
+  isSQLServerConnected: boolean;
+  sqlServerError: string | null;
+  fetchFromSQLServer: () => Promise<void>;
+  testSQLServerConfig: (config?: SQLServerConfig) => Promise<{ success: boolean; message: string }>;
+  initSQLServerDb: (config?: SQLServerConfig) => Promise<{ success: boolean; message: string }>;
 
   // MySQL State
   mysqlConfig: MySQLConfig;
@@ -559,6 +586,60 @@ export const useInventoryStore = create<InventoryState>()(
       searchTerm: '',
       setSearchTerm: (term) => set({ searchTerm: term }),
 
+      // SQL Server State & Actions
+      sqlServerConfig: getStoredSQLServerConfig(),
+      setSqlServerConfig: (config) => {
+        saveStoredSQLServerConfig(config);
+        set({ sqlServerConfig: config });
+      },
+      isLoadingFromSQLServer: false,
+      isSQLServerConnected: false,
+      sqlServerError: null,
+
+      fetchFromSQLServer: async () => {
+        set({ isLoadingFromSQLServer: true, sqlServerError: null });
+        const config = get().sqlServerConfig;
+        const res = await fetchAllFromSQLServer(config);
+        if (res.success) {
+          set({
+            items: res.items || [],
+            categories: res.categories || [],
+            warehouses: res.warehouses || [],
+            units: res.units || [],
+            vouchers: res.vouchers || [],
+            logs: res.logs || [],
+            isSQLServerConnected: true,
+            isLoadingFromSQLServer: false,
+          });
+        } else {
+          set({
+            sqlServerError: res.error || 'Không thể tải dữ liệu từ SQL Server',
+            isSQLServerConnected: false,
+            isLoadingFromSQLServer: false,
+          });
+        }
+      },
+
+      testSQLServerConfig: async (cfg) => {
+        const configToTest = cfg || get().sqlServerConfig;
+        const result = await testSQLServerConnection(configToTest);
+        if (result.success) {
+          set({ isSQLServerConnected: true, sqlServerError: null });
+        } else {
+          set({ isSQLServerConnected: false, sqlServerError: result.message });
+        }
+        return result;
+      },
+
+      initSQLServerDb: async (cfg) => {
+        const configToInit = cfg || get().sqlServerConfig;
+        const result = await initSQLServerTables(configToInit);
+        if (result.success) {
+          set({ isSQLServerConnected: true, sqlServerError: null });
+        }
+        return result;
+      },
+
       // MySQL State & Actions
       mysqlConfig: getStoredMySQLConfig(),
       setMysqlConfig: (config) => {
@@ -681,6 +762,7 @@ export const useInventoryStore = create<InventoryState>()(
         set((state) => ({ warehouses: [...state.warehouses, newWh] }));
         saveWarehouseToSupabase(newWh);
         saveWarehouseToMySQL(get().mysqlConfig, newWh);
+        saveWarehouseToSQLServer(get().sqlServerConfig, newWh);
       },
 
       updateWarehouse: (id, whData) => {
@@ -693,6 +775,7 @@ export const useInventoryStore = create<InventoryState>()(
           if (target) {
             saveWarehouseToSupabase(target);
             saveWarehouseToMySQL(get().mysqlConfig, target);
+            saveWarehouseToSQLServer(get().sqlServerConfig, target);
           }
           return { warehouses: updatedWhs, items: updatedItems };
         });
@@ -705,6 +788,7 @@ export const useInventoryStore = create<InventoryState>()(
         set({ warehouses: state.warehouses.filter((w) => w.id !== id) });
         deleteWarehouseFromSupabase(id);
         deleteWarehouseFromMySQL(get().mysqlConfig, id);
+        deleteWarehouseFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
 
@@ -715,6 +799,7 @@ export const useInventoryStore = create<InventoryState>()(
         set((state) => ({ categories: [...state.categories, newCat] }));
         saveCategoryToSupabase(newCat);
         saveCategoryToMySQL(get().mysqlConfig, newCat);
+        saveCategoryToSQLServer(get().sqlServerConfig, newCat);
       },
 
       updateCategory: (id, catData) => {
@@ -727,6 +812,7 @@ export const useInventoryStore = create<InventoryState>()(
           if (target) {
             saveCategoryToSupabase(target);
             saveCategoryToMySQL(get().mysqlConfig, target);
+            saveCategoryToSQLServer(get().sqlServerConfig, target);
           }
           return { categories: updatedCats, items: updatedItems };
         });
@@ -739,6 +825,7 @@ export const useInventoryStore = create<InventoryState>()(
         set({ categories: state.categories.filter((c) => c.id !== id) });
         deleteCategoryFromSupabase(id);
         deleteCategoryFromMySQL(get().mysqlConfig, id);
+        deleteCategoryFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
 
@@ -749,6 +836,7 @@ export const useInventoryStore = create<InventoryState>()(
         set((state) => ({ units: [...state.units, newUnit] }));
         saveUnitToSupabase(newUnit);
         saveUnitToMySQL(get().mysqlConfig, newUnit);
+        saveUnitToSQLServer(get().sqlServerConfig, newUnit);
       },
 
       updateUnit: (id, unitData) => {
@@ -761,6 +849,7 @@ export const useInventoryStore = create<InventoryState>()(
           if (target) {
             saveUnitToSupabase(target);
             saveUnitToMySQL(get().mysqlConfig, target);
+            saveUnitToSQLServer(get().sqlServerConfig, target);
           }
           return { units: updatedUnits, items: updatedItems };
         });
@@ -773,6 +862,7 @@ export const useInventoryStore = create<InventoryState>()(
         set({ units: state.units.filter((u) => u.id !== id) });
         deleteUnitFromSupabase(id);
         deleteUnitFromMySQL(get().mysqlConfig, id);
+        deleteUnitFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
 
@@ -803,6 +893,7 @@ export const useInventoryStore = create<InventoryState>()(
         set({ items: [newItem, ...state.items] });
         saveItemToSupabase(newItem);
         saveItemToMySQL(get().mysqlConfig, newItem);
+        saveItemToSQLServer(get().sqlServerConfig, newItem);
         return newItem;
       },
 
@@ -836,6 +927,7 @@ export const useInventoryStore = create<InventoryState>()(
         if (updatedItem) {
           saveItemToSupabase(updatedItem);
           saveItemToMySQL(get().mysqlConfig, updatedItem);
+          saveItemToSQLServer(get().sqlServerConfig, updatedItem);
         }
       },
 
@@ -845,6 +937,7 @@ export const useInventoryStore = create<InventoryState>()(
         }));
         deleteItemFromSupabase(id);
         deleteItemFromMySQL(get().mysqlConfig, id);
+        deleteItemFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
 
@@ -964,9 +1057,10 @@ export const useInventoryStore = create<InventoryState>()(
 
           newItems.push(newItem);
 
-          // Save item to DB (Supabase & MySQL)
+          // Save item to DB (Supabase, MySQL & SQL Server)
           saveItemToSupabase(newItem);
           saveItemToMySQL(state.mysqlConfig, newItem);
+          saveItemToSQLServer(get().sqlServerConfig, newItem);
 
           successCount++;
         });
@@ -1083,6 +1177,7 @@ export const useInventoryStore = create<InventoryState>()(
 
         saveVoucherToSupabase(newVoucher, newLogs, updatedItemsList);
         saveVoucherToMySQL(get().mysqlConfig, newVoucher, newLogs, updatedItemsList);
+        saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu nhập kho thành công: ${voucherCode}`, voucher: newVoucher };
       },
@@ -1192,6 +1287,7 @@ export const useInventoryStore = create<InventoryState>()(
 
         saveVoucherToSupabase(newVoucher, newLogs, updatedItemsList);
         saveVoucherToMySQL(get().mysqlConfig, newVoucher, newLogs, updatedItemsList);
+        saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu xuất kho thành công: ${voucherCode}`, voucher: newVoucher };
       },
