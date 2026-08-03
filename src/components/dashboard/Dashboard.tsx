@@ -108,12 +108,6 @@ export function Dashboard() {
       {/* Top Banner Header - Matching Image Dashboard Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 border border-slate-800 text-white shadow-xl">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
-              ERP Mini Inventory System
-            </span>
-            <span className="text-xs text-slate-400">| Cập nhật thời gian thực</span>
-          </div>
           <h1 className="text-xl font-bold mt-1 text-white tracking-tight">
             Thống Kê Vận Hành Kho Văn Phòng
           </h1>
