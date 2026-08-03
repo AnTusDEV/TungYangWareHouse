@@ -36,14 +36,6 @@ export function LoginView() {
     }
   };
 
-  const handleQuickLogin = (user: string, pass: string) => {
-    setUsername(user);
-    setPassword(pass);
-    setLocalError(null);
-    clearError();
-    login({ username: user, password: pass, rememberMe: true });
-  };
-
   const activeError = localError || authError;
 
   return (
@@ -161,31 +153,6 @@ export function LoginView() {
               )}
             </button>
           </form>
-
-          {/* Preset Quick Login Buttons */}
-          <div className="mt-8 pt-6 border-t border-slate-800 text-center">
-            <p className="text-[11px] font-semibold text-amber-400/80 uppercase tracking-wider mb-3">
-              Đăng nhập nhanh thử nghiệm
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('admin', 'admin123')}
-                className="p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-amber-500/30 text-slate-200 text-xs font-medium flex flex-col items-center justify-center transition-all hover:border-amber-400"
-              >
-                <span className="font-bold text-amber-400">Admin</span>
-                <span className="text-[10px] text-slate-400">admin / admin123</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('nhanvien', 'user123')}
-                className="p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium flex flex-col items-center justify-center transition-all hover:border-blue-500/50"
-              >
-                <span className="font-bold text-blue-400">Thủ kho</span>
-                <span className="text-[10px] text-slate-400">nhanvien / user123</span>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Footer info */}

@@ -9,6 +9,8 @@ import {
   InventoryLog,
   TabType,
 } from '../types/inventory';
+import { useAuthStore } from './useAuthStore';
+import { saveStoredLocalUsers } from '../lib/authApi';
 import {
   generateItemCode,
   generateVoucherCode,
@@ -611,6 +613,10 @@ export const useInventoryStore = create<InventoryState>()(
             isSQLServerConnected: true,
             isLoadingFromSQLServer: false,
           });
+          if (res.users && res.users.length > 0) {
+            useAuthStore.setState({ usersList: res.users });
+            saveStoredLocalUsers(res.users);
+          }
         } else {
           set({
             sqlServerError: res.error || 'Không thể tải dữ liệu từ SQL Server',
@@ -691,6 +697,10 @@ export const useInventoryStore = create<InventoryState>()(
             isMySQLConnected: true,
             isLoadingFromMySQL: false,
           });
+          if (res.users && res.users.length > 0) {
+            useAuthStore.setState({ usersList: res.users });
+            saveStoredLocalUsers(res.users);
+          }
         } else {
           set({
             mysqlError: res.error || 'Không thể tải dữ liệu từ MySQL',

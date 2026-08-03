@@ -19,6 +19,33 @@ import {
   apiDeleteUser,
   getStoredLocalUsers,
 } from '../lib/authApi';
+import { useInventoryStore } from './useInventoryStore';
+import { saveUserToSQLServer, deleteUserFromSQLServer } from '../lib/sqlServerSync';
+import { saveUserToMySQL, deleteUserFromMySQL } from '../lib/mysqlSync';
+
+function syncUserToDB(user: User, passwordHash?: string) {
+  try {
+    const invState = useInventoryStore.getState();
+    if (invState.isSQLServerConnected) {
+      saveUserToSQLServer(invState.sqlServerConfig, user, passwordHash);
+    }
+    if (invState.isMySQLConnected) {
+      saveUserToMySQL(invState.mysqlConfig, user, passwordHash);
+    }
+  } catch (e) {}
+}
+
+function syncDeleteUserFromDB(userId: string) {
+  try {
+    const invState = useInventoryStore.getState();
+    if (invState.isSQLServerConnected) {
+      deleteUserFromSQLServer(invState.sqlServerConfig, userId);
+    }
+    if (invState.isMySQLConnected) {
+      deleteUserFromMySQL(invState.mysqlConfig, userId);
+    }
+  } catch (e) {}
+}
 
 interface AuthState {
   currentUser: User | null;
@@ -133,6 +160,18 @@ export const useAuthStore = create<AuthState>()(
       fetchUsers: async () => {
         set({ isLoading: true });
         try {
+          const invState = useInventoryStore.getState();
+          if (invState.isSQLServerConnected) {
+            await invState.fetchFromSQLServer();
+            set({ isLoading: false });
+            return;
+          }
+          if (invState.isMySQLConnected) {
+            await invState.fetchFromMySQL();
+            set({ isLoading: false });
+            return;
+          }
+
           const list = await apiFetchUsers();
           set({ usersList: list, isLoading: false });
         } catch (err) {
@@ -145,6 +184,10 @@ export const useAuthStore = create<AuthState>()(
         try {
           await apiCreateUser(data);
           await get().fetchUsers();
+          const newUser = get().usersList.find((u) => u.username.toLowerCase() === data.username.toLowerCase());
+          if (newUser) {
+            syncUserToDB(newUser);
+          }
           set({ isLoading: false });
           return true;
         } catch (err: any) {
@@ -158,6 +201,9 @@ export const useAuthStore = create<AuthState>()(
         try {
           await apiUpdateUserStatus(userId, nextStatus);
           await get().fetchUsers();
+          const user = get().usersList.find((u) => u.id === userId);
+          if (user) syncUserToDB(user);
+
           // If we locked the currently logged in user, log them out
           const { currentUser } = get();
           if (currentUser?.id === userId && nextStatus === 'locked') {
@@ -172,6 +218,12 @@ export const useAuthStore = create<AuthState>()(
         try {
           const msg = await apiResetPassword(userId, newPass);
           await get().fetchUsers();
+          const user = get().usersList.find((u) => u.id === userId);
+          if (user) {
+            const bcrypt = (await import('bcryptjs')).default;
+            const passwordHash = bcrypt.hashSync(newPass, 10);
+            syncUserToDB(user, passwordHash);
+          }
           return msg;
         } catch (err: any) {
           throw err;
@@ -182,6 +234,9 @@ export const useAuthStore = create<AuthState>()(
         try {
           await apiUpdateUserInfo(userId, data);
           await get().fetchUsers();
+          const user = get().usersList.find((u) => u.id === userId);
+          if (user) syncUserToDB(user);
+
           // Sync if editing current logged in user
           const { currentUser } = get();
           if (currentUser?.id === userId) {
@@ -199,6 +254,7 @@ export const useAuthStore = create<AuthState>()(
         }
         try {
           await apiDeleteUser(userId);
+          syncDeleteUserFromDB(userId);
           await get().fetchUsers();
         } catch (err: any) {
           set({ authError: err.message });

@@ -1,4 +1,5 @@
 import { Item, Category, Warehouse, Unit, StockVoucher, InventoryLog } from '../types/inventory';
+import { User } from '../types/auth';
 
 export interface SQLServerConfig {
   host: string;
@@ -50,6 +51,7 @@ export interface SQLServerSyncResult {
   units?: Unit[];
   vouchers?: StockVoucher[];
   logs?: InventoryLog[];
+  users?: User[];
 }
 
 export async function testSQLServerConnection(config: SQLServerConfig): Promise<{ success: boolean; message: string }> {
@@ -189,6 +191,18 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
       createdAt: row.created_at,
     }));
 
+    const users: User[] = (data.users || []).map((row: any) => ({
+      id: row.id,
+      username: row.username,
+      fullName: row.full_name || row.fullName || '',
+      position: row.position || '',
+      notes: row.notes || '',
+      role: row.role as 'admin' | 'user',
+      status: row.status as 'active' | 'locked',
+      createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+      updatedAt: row.updated_at || row.updatedAt,
+    }));
+
     return {
       success: true,
       items,
@@ -197,9 +211,34 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
       units,
       vouchers,
       logs,
+      users,
     };
   } catch (err: any) {
     return { success: false, error: err.message || 'Lỗi mạng khi tải dữ liệu' };
+  }
+}
+
+export async function saveUserToSQLServer(config: SQLServerConfig, user: User, passwordHash?: string) {
+  try {
+    await fetch('/api/mssql/save-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, user, passwordHash }),
+    });
+  } catch (err) {
+    console.error('Failed to sync user to SQL Server', err);
+  }
+}
+
+export async function deleteUserFromSQLServer(config: SQLServerConfig, id: string) {
+  try {
+    await fetch('/api/mssql/delete-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, id }),
+    });
+  } catch (err) {
+    console.error('Failed to delete user from SQL Server', err);
   }
 }
 

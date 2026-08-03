@@ -595,6 +595,35 @@ app.post('/api/mysql/init-tables', async (req, res) => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // Create users table
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(50) PRIMARY KEY,
+        username VARCHAR(50) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255) NOT NULL,
+        position VARCHAR(255),
+        notes TEXT,
+        role VARCHAR(20) DEFAULT 'user',
+        status VARCHAR(20) DEFAULT 'active',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Seed default users if empty
+    const [userCountRows]: any = await conn.query('SELECT COUNT(*) as count FROM users');
+    if (userCountRows && userCountRows[0] && userCountRows[0].count === 0) {
+      const defaultAdminHash = bcrypt.hashSync('admin123', 10);
+      const defaultUserHash = bcrypt.hashSync('user123', 10);
+      await conn.query(`
+        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
+        VALUES 
+          ('usr_admin', 'admin', ?, 'Quản Trị Viên Hệ Thống', 'Quản trị viên', 'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', NOW()),
+          ('usr_nhanvien', 'nhanvien', ?, 'Nguyễn Văn Kho', 'Thủ kho', 'Tài khoản nhân viên vận hành kho', 'user', 'active', NOW());
+      `, [defaultAdminHash, defaultUserHash]);
+    }
+
     await conn.end();
 
     res.json({
@@ -627,6 +656,11 @@ app.post('/api/mysql/fetch-all', async (req, res) => {
     const [vouchersRows] = await conn.query('SELECT * FROM stock_vouchers ORDER BY created_at DESC');
     const [voucherItemsRows] = await conn.query('SELECT * FROM stock_voucher_items');
     const [logsRows] = await conn.query('SELECT * FROM inventory_logs ORDER BY created_at DESC');
+    let usersRows: any[] = [];
+    try {
+      const [uRows]: any = await conn.query('SELECT * FROM users ORDER BY created_at ASC');
+      usersRows = uRows || [];
+    } catch (_) {}
 
     await conn.end();
 
@@ -639,6 +673,7 @@ app.post('/api/mysql/fetch-all', async (req, res) => {
       vouchers: vouchersRows,
       voucherItems: voucherItemsRows,
       logs: logsRows,
+      users: usersRows,
     });
   } catch (err: any) {
     if (conn) {
@@ -1141,7 +1176,37 @@ app.post('/api/mssql/init-tables', async (req, res) => {
         note NVARCHAR(MAX),
         created_at DATETIME DEFAULT GETDATE()
       );
+
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'users')
+      CREATE TABLE users (
+        id VARCHAR(50) PRIMARY KEY,
+        username VARCHAR(50) NOT NULL UNIQUE,
+        password_hash NVARCHAR(255) NOT NULL,
+        full_name NVARCHAR(255) NOT NULL,
+        position NVARCHAR(255),
+        notes NVARCHAR(MAX),
+        role VARCHAR(20) DEFAULT 'user',
+        status VARCHAR(20) DEFAULT 'active',
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE()
+      );
     `);
+
+    // Seed default users if empty
+    const countRes = await pool.request().query('SELECT COUNT(*) as cnt FROM users');
+    if (countRes.recordset && countRes.recordset[0] && countRes.recordset[0].cnt === 0) {
+      const defaultAdminHash = bcrypt.hashSync('admin123', 10);
+      const defaultUserHash = bcrypt.hashSync('user123', 10);
+      const seedReq = pool.request();
+      seedReq.input('adminHash', mssql.NVarChar(255), defaultAdminHash);
+      seedReq.input('userHash', mssql.NVarChar(255), defaultUserHash);
+      await seedReq.query(`
+        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
+        VALUES 
+          ('usr_admin', 'admin', @adminHash, N'Quản Trị Viên Hệ Thống', N'Quản trị viên', N'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', GETDATE()),
+          ('usr_nhanvien', 'nhanvien', @userHash, N'Nguyễn Văn Kho', N'Thủ kho', N'Tài khoản nhân viên vận hành kho', 'user', 'active', GETDATE());
+      `);
+    }
 
     await pool.close();
 
@@ -1175,6 +1240,11 @@ app.post('/api/mssql/fetch-all', async (req, res) => {
     const vouchersRes = await pool.request().query('SELECT * FROM stock_vouchers ORDER BY created_at DESC');
     const voucherItemsRes = await pool.request().query('SELECT * FROM stock_voucher_items');
     const logsRes = await pool.request().query('SELECT * FROM inventory_logs ORDER BY created_at DESC');
+    let usersRecordset: any[] = [];
+    try {
+      const usersRes = await pool.request().query('SELECT * FROM users ORDER BY created_at ASC');
+      usersRecordset = usersRes.recordset || [];
+    } catch (_) {}
 
     await pool.close();
 
@@ -1187,6 +1257,7 @@ app.post('/api/mssql/fetch-all', async (req, res) => {
       vouchers: vouchersRes.recordset,
       voucherItems: voucherItemsRes.recordset,
       logs: logsRes.recordset,
+      users: usersRecordset,
     });
   } catch (err: any) {
     if (pool) {
@@ -1547,6 +1618,168 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
       `);
     }
 
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Save User (MySQL)
+app.post('/api/mysql/save-user', async (req, res) => {
+  let conn;
+  try {
+    const { config, user, passwordHash } = req.body;
+    conn = await getMySQLConnection(config, true);
+
+    if (passwordHash) {
+      const sql = `
+        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          username = VALUES(username),
+          password_hash = VALUES(password_hash),
+          full_name = VALUES(full_name),
+          position = VALUES(position),
+          notes = VALUES(notes),
+          role = VALUES(role),
+          status = VALUES(status),
+          updated_at = NOW();
+      `;
+      await conn.execute(sql, [
+        user.id,
+        user.username.toLowerCase(),
+        passwordHash,
+        user.fullName,
+        user.position || '',
+        user.notes || '',
+        user.role || 'user',
+        user.status || 'active',
+      ]);
+    } else {
+      const sql = `
+        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
+        VALUES (?, ?, 'HASH_PLACEHOLDER', ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          full_name = VALUES(full_name),
+          position = VALUES(position),
+          notes = VALUES(notes),
+          role = VALUES(role),
+          status = VALUES(status),
+          updated_at = NOW();
+      `;
+      await conn.execute(sql, [
+        user.id,
+        user.username.toLowerCase(),
+        user.fullName,
+        user.position || '',
+        user.notes || '',
+        user.role || 'user',
+        user.status || 'active',
+      ]);
+    }
+
+    await conn.end();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (conn) { try { await conn.end(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Delete User (MySQL)
+app.post('/api/mysql/delete-user', async (req, res) => {
+  let conn;
+  try {
+    const { config, id } = req.body;
+    conn = await getMySQLConnection(config, true);
+    await conn.execute('DELETE FROM users WHERE id = ?', [id]);
+    await conn.end();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (conn) { try { await conn.end(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Save User (MSSQL)
+app.post('/api/mssql/save-user', async (req, res) => {
+  let pool;
+  try {
+    const { config, user, passwordHash } = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), user.id);
+    request.input('username', mssql.VarChar(50), user.username.toLowerCase());
+    request.input('full_name', mssql.NVarChar(255), user.fullName);
+    request.input('position', mssql.NVarChar(255), user.position || '');
+    request.input('notes', mssql.NVarChar(mssql.MAX), user.notes || '');
+    request.input('role', mssql.VarChar(20), user.role || 'user');
+    request.input('status', mssql.VarChar(20), user.status || 'active');
+
+    if (passwordHash) {
+      request.input('password_hash', mssql.NVarChar(255), passwordHash);
+      await request.query(`
+        IF EXISTS (SELECT 1 FROM users WHERE id = @id)
+        BEGIN
+          UPDATE users SET
+            username = @username,
+            password_hash = @password_hash,
+            full_name = @full_name,
+            position = @position,
+            notes = @notes,
+            role = @role,
+            status = @status,
+            updated_at = GETDATE()
+          WHERE id = @id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
+          VALUES (@id, @username, @password_hash, @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+        END
+      `);
+    } else {
+      await request.query(`
+        IF EXISTS (SELECT 1 FROM users WHERE id = @id)
+        BEGIN
+          UPDATE users SET
+            username = @username,
+            full_name = @full_name,
+            position = @position,
+            notes = @notes,
+            role = @role,
+            status = @status,
+            updated_at = GETDATE()
+          WHERE id = @id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
+          VALUES (@id, @username, N'HASH_PLACEHOLDER', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+        END
+      `);
+    }
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) {} }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Delete User (MSSQL)
+app.post('/api/mssql/delete-user', async (req, res) => {
+  let pool;
+  try {
+    const { config, id } = req.body;
+    pool = await getMSSQLPool(config, true);
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), id);
+    await request.query('DELETE FROM users WHERE id = @id');
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {

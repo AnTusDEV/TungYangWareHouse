@@ -1,4 +1,5 @@
 import { Item, Category, Warehouse, Unit, StockVoucher, InventoryLog } from '../types/inventory';
+import { User } from '../types/auth';
 
 export interface MySQLConfig {
   host: string;
@@ -50,6 +51,7 @@ export interface MySQLSyncResult {
   units?: Unit[];
   vouchers?: StockVoucher[];
   logs?: InventoryLog[];
+  users?: User[];
 }
 
 export async function testMySQLConnection(config: MySQLConfig): Promise<{ success: boolean; message: string }> {
@@ -189,6 +191,18 @@ export async function fetchAllFromMySQL(config: MySQLConfig): Promise<MySQLSyncR
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
     }));
 
+    const users: User[] = (data.users || []).map((row: any) => ({
+      id: String(row.id),
+      username: String(row.username),
+      fullName: String(row.full_name || row.fullName || ''),
+      position: String(row.position || ''),
+      notes: String(row.notes || ''),
+      role: row.role as 'admin' | 'user',
+      status: row.status as 'active' | 'locked',
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+    }));
+
     return {
       success: true,
       items,
@@ -197,9 +211,34 @@ export async function fetchAllFromMySQL(config: MySQLConfig): Promise<MySQLSyncR
       units,
       vouchers,
       logs,
+      users,
     };
   } catch (err: any) {
     return { success: false, error: err.message || 'Lỗi kết nối tới MySQL' };
+  }
+}
+
+export async function saveUserToMySQL(config: MySQLConfig, user: User, passwordHash?: string) {
+  try {
+    await fetch('/api/mysql/save-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, user, passwordHash }),
+    });
+  } catch (err) {
+    console.error('Error saving user to MySQL:', err);
+  }
+}
+
+export async function deleteUserFromMySQL(config: MySQLConfig, id: string) {
+  try {
+    await fetch('/api/mysql/delete-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, id }),
+    });
+  } catch (err) {
+    console.error('Error deleting user from MySQL:', err);
   }
 }
 
