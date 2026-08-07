@@ -6,7 +6,6 @@ import {
   FileText,
   Calendar,
   User,
-  Building,
   Warehouse,
   CheckCircle,
   AlertCircle,
@@ -41,19 +40,8 @@ export function StockOutManager() {
   // Form State
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [person, setPerson] = useState<string>(currentUserName);
-  const [department, setDepartment] = useState<string>('Phòng Hành chính Nhân sự');
   const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || 'wh-1');
   const [note, setNote] = useState<string>('Cấp phát văn phòng phẩm định kỳ');
-
-  // Available departments list
-  const departments = [
-    'Phòng Hành chính Nhân sự',
-    'Phòng Kế toán Tài chính',
-    'Phòng Kỹ thuật Công nghệ',
-    'Phòng Kinh doanh & Marketing',
-    'Ban Giám đốc',
-    'Khác / Cá nhân',
-  ];
 
   // Line Items State
   const [lineItems, setLineItems] = useState<{ itemId: string; quantity: number }[]>([
@@ -65,7 +53,6 @@ export function StockOutManager() {
     setAlertInfo(null);
     setDate(new Date().toISOString().split('T')[0]);
     setPerson(currentUserName);
-    setDepartment('Phòng Hành chính Nhân sự');
     setWarehouseId(warehouses[0]?.id || 'wh-1');
     setNote('Cấp phát văn phòng phẩm');
 
@@ -122,7 +109,6 @@ export function StockOutManager() {
     const res = createStockOutVoucher({
       date,
       person,
-      department,
       warehouseId,
       note,
       items: lineItems,
@@ -162,16 +148,6 @@ export function StockOutManager() {
       header: 'Người Nhận',
       sortable: true,
       render: (v) => <span className="font-semibold text-slate-900 dark:text-slate-100">{v.person}</span>,
-    },
-    {
-      key: 'department',
-      header: 'Bộ Phận',
-      sortable: true,
-      render: (v) => (
-        <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-medium text-xs">
-          {v.department || '-'}
-        </span>
-      ),
     },
     {
       key: 'warehouseName',
@@ -248,8 +224,8 @@ export function StockOutManager() {
         data={outboundVouchers}
         columns={columns}
         rowKey={(v) => v.id}
-        searchKey={(v) => `${v.code} ${v.person} ${v.department} ${v.warehouseName} ${v.note}`}
-        searchPlaceholder="Tìm kiếm số phiếu, người nhận, bộ phận..."
+        searchKey={(v) => `${v.code} ${v.person} ${v.warehouseName} ${v.note}`}
+        searchPlaceholder="Tìm kiếm số phiếu, người nhận..."
         onRowClick={(v) => setViewingVoucher(v)}
       />
 
@@ -299,7 +275,7 @@ export function StockOutManager() {
           )}
 
           {/* Header Info */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Ngày Xuất
@@ -325,24 +301,6 @@ export function StockOutManager() {
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-not-allowed opacity-90"
                 title="Tài khoản đăng nhập hiện tại (không thể chỉnh sửa)"
               />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Bộ Phận Nhận
-              </label>
-              <select
-                value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                aria-label="Chọn bộ phận"
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-rose-500 focus:outline-none"
-              >
-                {departments.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
             </div>
 
             <div>
@@ -506,10 +464,6 @@ export function StockOutManager() {
               <div>
                 <span className="text-slate-400">Người nhận:</span>{' '}
                 <strong className="text-slate-800 dark:text-slate-200">{viewingVoucher.person}</strong>
-              </div>
-              <div>
-                <span className="text-slate-400">Bộ phận:</span>{' '}
-                <strong className="text-slate-800 dark:text-slate-200">{viewingVoucher.department || '-'}</strong>
               </div>
               <div>
                 <span className="text-slate-400">Xuất từ kho:</span>{' '}
