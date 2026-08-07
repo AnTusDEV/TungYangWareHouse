@@ -18,6 +18,7 @@ import { useInventoryStore } from '../../store/useInventoryStore';
 import { StockVoucher } from '../../types/inventory';
 import { Modal } from '../common/Modal';
 import { DataTable, Column } from '../common/DataTable';
+import { ProductSelect } from '../common/ProductSelect';
 import {
   formatNumber,
   formatDate,
@@ -387,12 +388,12 @@ export function StockOutManager() {
               </button>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-visible">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-semibold">
                   <tr>
                     <th className="p-3 w-12 text-center">STT</th>
-                    <th className="p-3">Hàng Hóa Xuất Kho</th>
+                    <th className="p-3">Hàng Hóa Xuất Kho (Có Tìm Kiếm)</th>
                     <th className="p-3 w-28 text-center">ĐVT</th>
                     <th className="p-3 w-36 text-right">Tồn Hiện Tại</th>
                     <th className="p-3 w-36 text-right">Số Lượng Xuất</th>
@@ -414,18 +415,12 @@ export function StockOutManager() {
                       >
                         <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
                         <td className="p-3">
-                          <select
+                          <ProductSelect
+                            items={items}
                             value={line.itemId}
-                            onChange={(e) => handleItemChange(idx, e.target.value)}
-                            aria-label={`Mặt hàng xuất dòng ${idx + 1}`}
-                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-rose-500 focus:outline-none"
-                          >
-                            {items.map((i) => (
-                              <option key={i.id} value={i.id}>
-                                [{i.code}] {i.name} (Tồn: {i.stockQuantity} {i.unitName})
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(itemId) => handleItemChange(idx, itemId)}
+                            ariaLabel={`Mặt hàng xuất dòng ${idx + 1}`}
+                          />
                         </td>
                         <td className="p-3 text-center font-semibold text-slate-600 dark:text-slate-400">
                           {item?.unitName || '-'}

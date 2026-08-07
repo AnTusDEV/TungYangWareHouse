@@ -3,6 +3,7 @@ import {
   ArrowDownLeft,
   Plus,
   Trash2,
+  Edit2,
   FileText,
   Calendar,
   User,
@@ -11,23 +12,61 @@ import {
   AlertCircle,
   Eye,
   Check,
+  Clock,
+  AlertTriangle,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { StockVoucher } from '../../types/inventory';
 import { Modal } from '../common/Modal';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 import { DataTable, Column } from '../common/DataTable';
+import { ProductSelect } from '../common/ProductSelect';
 import {
   formatNumber,
   formatDate,
   generateVoucherCode,
 } from '../../lib/formatters';
 
+// Helper to check 24-hour limit
+function get24hStatus(voucher: StockVoucher): {
+  isEditable: boolean;
+  text: string;
+} {
+  const createdAtMs = new Date(voucher.createdAt || voucher.date).getTime();
+  const nowMs = Date.now();
+  const diffMs = nowMs - createdAtMs;
+  const maxMs = 24 * 60 * 60 * 1000;
+
+  if (diffMs < 0 || diffMs <= maxMs) {
+    const remainingMs = maxMs - (diffMs < 0 ? 0 : diffMs);
+    const hours = Math.floor(remainingMs / (1000 * 60 * 60));
+    const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+    return {
+      isEditable: true,
+      text: `Còn ${hours}h ${mins}m`,
+    };
+  }
+  return {
+    isEditable: false,
+    text: 'Đã quá 24h',
+  };
+}
+
 export function StockInManager() {
-  const { items, warehouses, vouchers, createStockInVoucher } = useInventoryStore();
+  const {
+    items,
+    warehouses,
+    vouchers,
+    createStockInVoucher,
+    updateStockInVoucher,
+    deleteStockInVoucher,
+  } = useInventoryStore();
 
   const inboundVouchers = vouchers.filter((v) => v.type === 'IN');
 
-  const [isCreating, setIsCreating] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingVoucher, setEditingVoucher] = useState<StockVoucher | null>(null);
+  const [deletingVoucher, setDeletingVoucher] = useState<StockVoucher | null>(null);
   const [viewingVoucher, setViewingVoucher] = useState<StockVoucher | null>(null);
   const [alertInfo, setAlertInfo] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -40,10 +79,10 @@ export function StockInManager() {
   // Line Items State
   const [lineItems, setLineItems] = useState<
     { itemId: string; quantity: number }[]
-  >([{ itemId: items[0]?.id || '', quantity: 1 }]);
+  >([{ itemId: items[0]?.id || '', quantity: 10 }]);
 
   const handleOpenCreate = () => {
-    setIsCreating(true);
+    setEditingVoucher(null);
     setAlertInfo(null);
     setDate(new Date().toISOString().split('T')[0]);
     setPerson('Nguyễn Văn Tuấn');
@@ -52,6 +91,55 @@ export function StockInManager() {
     if (items.length > 0) {
       setLineItems([{ itemId: items[0].id, quantity: 10 }]);
     }
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (v: StockVoucher) => {
+    const status = get24hStatus(v);
+    if (!status.isEditable) {
+      alert(`Phiếu nhập kho ${v.code} đã tạo quá 24 giờ (${status.text}). Không thể chỉnh sửa!`);
+      return;
+    }
+
+    setEditingVoucher(v);
+    setAlertInfo(null);
+    setDate(v.date || new Date().toISOString().split('T')[0]);
+    setPerson(v.person || 'Nguyễn Văn Tuấn');
+    setWarehouseId(v.warehouseId || warehouses[0]?.id || 'wh-1');
+    setNote(v.note || '');
+    setLineItems(
+      v.items.map((i) => ({
+        itemId: i.itemId,
+        quantity: i.quantity,
+      }))
+    );
+    if (viewingVoucher?.id === v.id) {
+      setViewingVoucher(null);
+    }
+    setIsModalOpen(true);
+  };
+
+  const handleOpenDelete = (v: StockVoucher) => {
+    const status = get24hStatus(v);
+    if (!status.isEditable) {
+      alert(`Phiếu nhập kho ${v.code} đã tạo quá 24 giờ (${status.text}). Không thể xóa!`);
+      return;
+    }
+    setDeletingVoucher(v);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!deletingVoucher) return;
+    const res = deleteStockInVoucher(deletingVoucher.id);
+    if (res.success) {
+      setAlertInfo({ type: 'success', message: res.message });
+      if (viewingVoucher?.id === deletingVoucher.id) {
+        setViewingVoucher(null);
+      }
+    } else {
+      setAlertInfo({ type: 'error', message: res.message });
+    }
+    setDeletingVoucher(null);
   };
 
   const handleAddLine = () => {
@@ -88,20 +176,33 @@ export function StockInManager() {
     e.preventDefault();
     setAlertInfo(null);
 
-    const res = createStockInVoucher({
-      date,
-      person,
-      warehouseId,
-      note,
-      items: lineItems,
-    });
+    let res: { success: boolean; message: string };
+
+    if (editingVoucher) {
+      res = updateStockInVoucher(editingVoucher.id, {
+        date,
+        person,
+        warehouseId,
+        note,
+        items: lineItems,
+      });
+    } else {
+      res = createStockInVoucher({
+        date,
+        person,
+        warehouseId,
+        note,
+        items: lineItems,
+      });
+    }
 
     if (res.success) {
       setAlertInfo({ type: 'success', message: res.message });
       setTimeout(() => {
-        setIsCreating(false);
+        setIsModalOpen(false);
+        setEditingVoucher(null);
         setAlertInfo(null);
-      }, 1200);
+      }, 1000);
     } else {
       setAlertInfo({ type: 'error', message: res.message });
     }
@@ -149,10 +250,24 @@ export function StockInManager() {
       ),
     },
     {
-      key: 'itemsCount',
-      header: 'Số Mặt Hàng',
+      key: '24hStatus',
+      header: 'Hạn Sửa/Xóa (24h)',
       align: 'center',
-      render: (v) => <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-medium">{v.items.length}</span>,
+      render: (v) => {
+        const status = get24hStatus(v);
+        return (
+          <span
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+              status.isEditable
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700'
+            }`}
+          >
+            <Clock className="h-3 w-3" />
+            {status.text}
+          </span>
+        );
+      },
     },
     {
       key: 'note',
@@ -161,25 +276,94 @@ export function StockInManager() {
     },
     {
       key: 'actions',
-      header: 'Chi Tiết',
+      header: 'Thao Tác',
       align: 'center',
-      render: (v) => (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setViewingVoucher(v);
-          }}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-          title="Xem chi tiết phiếu nhập"
-        >
-          <Eye className="h-4 w-4" />
-        </button>
-      ),
+      render: (v) => {
+        const status = get24hStatus(v);
+        return (
+          <div className="flex items-center justify-center gap-1">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setViewingVoucher(v);
+              }}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              title="Xem chi tiết phiếu nhập"
+            >
+              <Eye className="h-4 w-4" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenEdit(v);
+              }}
+              disabled={!status.isEditable}
+              className={`p-1.5 rounded-lg transition-colors ${
+                status.isEditable
+                  ? 'text-amber-500 hover:text-amber-600 hover:bg-amber-500/10'
+                  : 'text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40'
+              }`}
+              title={
+                status.isEditable
+                  ? 'Chỉnh sửa phiếu (trong vòng 24h)'
+                  : 'Đã quá 24h - Không thể sửa'
+              }
+            >
+              <Edit2 className="h-4 w-4" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenDelete(v);
+              }}
+              disabled={!status.isEditable}
+              className={`p-1.5 rounded-lg transition-colors ${
+                status.isEditable
+                  ? 'text-rose-500 hover:text-rose-600 hover:bg-rose-500/10'
+                  : 'text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40'
+              }`}
+              title={
+                status.isEditable
+                  ? 'Xóa phiếu nhập (trong vòng 24h)'
+                  : 'Đã quá 24h - Không thể xóa'
+              }
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        );
+      },
     },
   ];
 
   return (
     <div className="space-y-6">
+      {/* Top Banner alert if any action result */}
+      {alertInfo && (
+        <div
+          className={`p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${
+            alertInfo.type === 'success'
+              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+              : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {alertInfo.type === 'success' ? (
+              <CheckCircle className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="h-4 w-4 shrink-0" />
+            )}
+            <span>{alertInfo.message}</span>
+          </div>
+          <button
+            onClick={() => setAlertInfo(null)}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -188,7 +372,7 @@ export function StockInManager() {
             Lập Phiếu Nhập Kho ({inboundVouchers.length})
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Tạo phiếu nhập hàng hóa, bổ sung tồn kho & lưu lịch sử biên bản giao nhận
+            Tạo phiếu nhập hàng hóa, bổ sung tồn kho. LƯU Ý: Sửa/xóa phiếu nhập chỉ được phép trong vòng <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">24 giờ</strong> sau khi tạo.
           </p>
         </div>
 
@@ -211,17 +395,23 @@ export function StockInManager() {
         onRowClick={(v) => setViewingVoucher(v)}
       />
 
-      {/* Create Inbound Voucher Modal */}
+      {/* Create / Edit Inbound Voucher Modal */}
       <Modal
-        isOpen={isCreating}
-        onClose={() => setIsCreating(false)}
-        title="Tạo Phiếu Nhập Kho Mới"
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingVoucher(null);
+        }}
+        title={editingVoucher ? `Chỉnh Sửa Phiếu Nhập Kho: ${editingVoucher.code}` : 'Tạo Phiếu Nhập Kho Mới'}
         maxWidth="4xl"
         footer={
           <>
             <button
               type="button"
-              onClick={() => setIsCreating(false)}
+              onClick={() => {
+                setIsModalOpen(false);
+                setEditingVoucher(null);
+              }}
               className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
             >
               Hủy
@@ -232,7 +422,7 @@ export function StockInManager() {
               className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-colors"
             >
               <Check className="h-4 w-4" />
-              Lưu Phiếu & Cộng Tồn Kho
+              {editingVoucher ? 'Cập Nhật Phiếu & Cập Nhật Tồn Kho' : 'Lưu Phiếu & Cộng Tồn Kho'}
             </button>
           </>
         }
@@ -252,6 +442,15 @@ export function StockInManager() {
                 <AlertCircle className="h-4 w-4 shrink-0" />
               )}
               <span>{alertInfo.message}</span>
+            </div>
+          )}
+
+          {editingVoucher && (
+            <div className="p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20 text-xs flex items-center gap-2">
+              <Clock className="h-4 w-4 text-amber-500 shrink-0" />
+              <span>
+                Đang chỉnh sửa phiếu <strong>{editingVoucher.code}</strong>. Khi lưu, số lượng tồn kho sẽ được tự động điều chỉnh lại. ({get24hStatus(editingVoucher).text})
+              </span>
             </div>
           )}
 
@@ -316,7 +515,7 @@ export function StockInManager() {
             </div>
           </div>
 
-          {/* Line Items Table */}
+          {/* Line Items Table with Searchable Product Select */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
@@ -332,12 +531,12 @@ export function StockInManager() {
               </button>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-visible">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-semibold">
                   <tr>
                     <th className="p-3 w-12 text-center">STT</th>
-                    <th className="p-3">Hàng Hóa Nhập Kho</th>
+                    <th className="p-3">Hàng Hóa Nhập Kho (Có Tìm Kiếm)</th>
                     <th className="p-3 w-28 text-center">Đơn Vị</th>
                     <th className="p-3 w-36 text-right">Số Lượng Nhập</th>
                     <th className="p-3 w-12 text-center"></th>
@@ -351,18 +550,12 @@ export function StockInManager() {
                       <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                         <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
                         <td className="p-3">
-                          <select
+                          <ProductSelect
+                            items={items}
                             value={line.itemId}
-                            onChange={(e) => handleItemChange(idx, e.target.value)}
-                            aria-label={`Mặt hàng dòng ${idx + 1}`}
-                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-emerald-500 focus:outline-none"
-                          >
-                            {items.map((i) => (
-                              <option key={i.id} value={i.id}>
-                                [{i.code}] {i.name} (Tồn hiện tại: {i.stockQuantity} {i.unitName})
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(itemId) => handleItemChange(idx, itemId)}
+                            ariaLabel={`Mặt hàng dòng ${idx + 1}`}
+                          />
                         </td>
                         <td className="p-3 text-center font-semibold text-slate-600 dark:text-slate-400">
                           {item?.unitName || '-'}
@@ -396,6 +589,20 @@ export function StockInManager() {
         </form>
       </Modal>
 
+      {/* Delete Confirmation Modal */}
+      {deletingVoucher && (
+        <ConfirmDialog
+          isOpen={true}
+          onClose={() => setDeletingVoucher(null)}
+          onConfirm={handleConfirmDelete}
+          title="Xác nhận xóa phiếu nhập kho"
+          message={`Bạn có chắc chắn muốn xóa phiếu nhập kho "${deletingVoucher.code}"? Số lượng tồn kho của các sản phẩm trong phiếu sẽ được trừ tương ứng.`}
+          confirmLabel="Xóa Phiếu & Hoàn Tồn Kho"
+          cancelLabel="Hủy bỏ"
+          isDangerous={true}
+        />
+      )}
+
       {/* View Voucher Details Modal */}
       {viewingVoucher && (
         <Modal
@@ -404,12 +611,55 @@ export function StockInManager() {
           title={`Chi Tiết Phiếu Nhập Kho: ${viewingVoucher.code}`}
           maxWidth="lg"
           footer={
-            <button
-              onClick={() => setViewingVoucher(null)}
-              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
-            >
-              Đóng
-            </button>
+            <div className="flex items-center justify-between w-full">
+              <div>
+                {(() => {
+                  const status = get24hStatus(viewingVoucher);
+                  return (
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                        status.isEditable
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <Clock className="h-3.5 w-3.5" />
+                      Hạn sửa/xóa: {status.text}
+                    </span>
+                  );
+                })()}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {get24hStatus(viewingVoucher).isEditable && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenDelete(viewingVoucher)}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg text-rose-600 hover:bg-rose-500/10 transition-colors flex items-center gap-1"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Xóa phiếu
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(viewingVoucher)}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition-colors flex items-center gap-1 shadow-sm"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                      Chỉnh sửa
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewingVoucher(null)}
+                  className="px-4 py-1.5 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
           }
         >
           <div className="space-y-4 text-xs">

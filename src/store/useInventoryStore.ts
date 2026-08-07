@@ -44,6 +44,7 @@ import {
   saveUnitToMySQL,
   deleteUnitFromMySQL,
   saveVoucherToMySQL,
+  deleteVoucherFromMySQL,
 } from '../lib/mysqlSync';
 import {
   SQLServerConfig,
@@ -61,6 +62,7 @@ import {
   saveUnitToSQLServer,
   deleteUnitFromSQLServer,
   saveVoucherToSQLServer,
+  deleteVoucherFromSQLServer,
 } from '../lib/sqlServerSync';
 
 interface InventoryState {
@@ -142,6 +144,19 @@ interface InventoryState {
     note?: string;
     items: { itemId: string; quantity: number }[];
   }) => { success: boolean; message: string; voucher?: StockVoucher };
+
+  updateStockInVoucher: (
+    id: string,
+    data: {
+      date: string;
+      person: string;
+      warehouseId: string;
+      note?: string;
+      items: { itemId: string; quantity: number }[];
+    }
+  ) => { success: boolean; message: string; voucher?: StockVoucher };
+
+  deleteStockInVoucher: (id: string) => { success: boolean; message: string };
 
   createStockOutVoucher: (data: {
     date: string;
@@ -1190,6 +1205,182 @@ export const useInventoryStore = create<InventoryState>()(
         saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu nhập kho thành công: ${voucherCode}`, voucher: newVoucher };
+      },
+
+      // Update Inbound Stock Voucher (restricted to 24h)
+      updateStockInVoucher: (id, data) => {
+        const state = get();
+        const existingVoucher = state.vouchers.find((v) => v.id === id);
+        if (!existingVoucher) {
+          return { success: false, message: 'Không tìm thấy phiếu nhập kho' };
+        }
+        if (existingVoucher.type !== 'IN') {
+          return { success: false, message: 'Phiếu này không phải là phiếu nhập kho' };
+        }
+
+        // 24-hour validation check
+        const createdAtMs = new Date(existingVoucher.createdAt || existingVoucher.date).getTime();
+        const diffHours = (Date.now() - createdAtMs) / (1000 * 60 * 60);
+        if (diffHours > 24) {
+          return {
+            success: false,
+            message: 'Chỉ được chỉnh sửa phiếu nhập kho trong vòng 24 giờ kể từ thời điểm tạo phiếu.',
+          };
+        }
+
+        if (!data.items || data.items.length === 0) {
+          return { success: false, message: 'Vui lòng chọn ít nhất 1 mặt hàng' };
+        }
+
+        const warehouse = state.warehouses.find((w) => w.id === data.warehouseId);
+        if (!warehouse) {
+          return { success: false, message: 'Kho nhập không tồn tại' };
+        }
+
+        const nowIso = new Date().toISOString();
+        const updatedItemsMap = new Map<string, Item>(state.items.map((i) => [i.id, { ...i }]));
+
+        // 1. Rollback stock from old voucher items
+        for (const oldLine of existingVoucher.items) {
+          const item = updatedItemsMap.get(oldLine.itemId);
+          if (item) {
+            item.stockQuantity = Math.max(0, item.stockQuantity - oldLine.quantity);
+            item.updatedAt = nowIso;
+          }
+        }
+
+        // 2. Add stock from new voucher items
+        let totalQty = 0;
+        const newVoucherItems: StockVoucher['items'] = [];
+        const newLogs: InventoryLog[] = [];
+
+        for (const line of data.items) {
+          const item = updatedItemsMap.get(line.itemId);
+          if (!item) continue;
+          const qty = Number(line.quantity) || 0;
+          if (qty <= 0) continue;
+
+          const prevStock = item.stockQuantity;
+          const newStock = prevStock + qty;
+          item.stockQuantity = newStock;
+          item.updatedAt = nowIso;
+          totalQty += qty;
+
+          newVoucherItems.push({
+            itemId: item.id,
+            itemCode: item.code,
+            itemName: item.name,
+            unitName: item.unitName,
+            quantity: qty,
+            currentStock: newStock,
+          });
+
+          newLogs.push({
+            id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            voucherId: id,
+            voucherCode: existingVoucher.code,
+            type: 'IN',
+            date: data.date,
+            itemId: item.id,
+            itemCode: item.code,
+            itemName: item.name,
+            categoryName: item.categoryName,
+            warehouseId: warehouse.id,
+            warehouseName: warehouse.name,
+            quantity: qty,
+            previousStock: prevStock,
+            newStock: newStock,
+            person: data.person,
+            note: data.note || 'Cập nhật phiếu nhập kho',
+          });
+        }
+
+        if (newVoucherItems.length === 0) {
+          return { success: false, message: 'Số lượng nhập phải lớn hơn 0' };
+        }
+
+        const updatedVoucher: StockVoucher = {
+          ...existingVoucher,
+          date: data.date,
+          person: data.person,
+          warehouseId: warehouse.id,
+          warehouseName: warehouse.name,
+          note: data.note,
+          items: newVoucherItems,
+          totalQuantity: totalQty,
+        };
+
+        const updatedItemsList = Array.from(updatedItemsMap.values());
+        const updatedVouchers = state.vouchers.map((v) => (v.id === id ? updatedVoucher : v));
+        const filteredLogs = state.logs.filter((l) => l.voucherId !== id);
+
+        set({
+          vouchers: updatedVouchers,
+          logs: [...newLogs, ...filteredLogs],
+          items: updatedItemsList,
+        });
+
+        saveVoucherToSupabase(updatedVoucher, newLogs, updatedItemsList);
+        saveVoucherToMySQL(get().mysqlConfig, updatedVoucher, newLogs, updatedItemsList);
+        saveVoucherToSQLServer(get().sqlServerConfig, updatedVoucher, newLogs, updatedItemsList);
+
+        return {
+          success: true,
+          message: `Cập nhật phiếu nhập kho ${existingVoucher.code} thành công!`,
+          voucher: updatedVoucher,
+        };
+      },
+
+      // Delete Inbound Stock Voucher (restricted to 24h & reverts stock)
+      deleteStockInVoucher: (id) => {
+        const state = get();
+        const existingVoucher = state.vouchers.find((v) => v.id === id);
+        if (!existingVoucher) {
+          return { success: false, message: 'Không tìm thấy phiếu nhập kho' };
+        }
+        if (existingVoucher.type !== 'IN') {
+          return { success: false, message: 'Phiếu này không phải là phiếu nhập kho' };
+        }
+
+        // 24-hour validation check
+        const createdAtMs = new Date(existingVoucher.createdAt || existingVoucher.date).getTime();
+        const diffHours = (Date.now() - createdAtMs) / (1000 * 60 * 60);
+        if (diffHours > 24) {
+          return {
+            success: false,
+            message: 'Chỉ được xóa phiếu nhập kho trong vòng 24 giờ kể từ thời điểm tạo phiếu.',
+          };
+        }
+
+        const nowIso = new Date().toISOString();
+        const updatedItemsMap = new Map<string, Item>(state.items.map((i) => [i.id, { ...i }]));
+
+        // Revert stock added by this voucher
+        for (const line of existingVoucher.items) {
+          const item = updatedItemsMap.get(line.itemId);
+          if (item) {
+            item.stockQuantity = Math.max(0, item.stockQuantity - line.quantity);
+            item.updatedAt = nowIso;
+          }
+        }
+
+        const updatedItemsList = Array.from(updatedItemsMap.values());
+        const updatedVouchers = state.vouchers.filter((v) => v.id !== id);
+        const updatedLogs = state.logs.filter((l) => l.voucherId !== id);
+
+        set({
+          vouchers: updatedVouchers,
+          logs: updatedLogs,
+          items: updatedItemsList,
+        });
+
+        deleteVoucherFromMySQL(get().mysqlConfig, id, updatedItemsList);
+        deleteVoucherFromSQLServer(get().sqlServerConfig, id, updatedItemsList);
+
+        return {
+          success: true,
+          message: `Đã xóa phiếu nhập kho ${existingVoucher.code} và hoàn trả số lượng tồn kho.`,
+        };
       },
 
       // Create Outbound Stock Voucher with STRICT stock check

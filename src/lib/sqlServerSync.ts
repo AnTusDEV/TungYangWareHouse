@@ -377,3 +377,19 @@ export async function saveVoucherToSQLServer(
     console.error('Failed to sync voucher to SQL Server', err);
   }
 }
+
+export async function deleteVoucherFromSQLServer(
+  config: SQLServerConfig,
+  id: string,
+  updatedItems: Item[]
+) {
+  try {
+    await fetch('/api/mssql/delete-voucher', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, id, updatedItems }),
+    });
+  } catch (err) {
+    console.error('Failed to delete voucher from SQL Server', err);
+  }
+}

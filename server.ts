@@ -25,90 +25,238 @@ interface ServerUser {
   updatedAt?: string;
 }
 
-const USERS_FILE_PATH = path.join(process.cwd(), 'data', 'users.json');
-
-function ensureDataDirExists() {
-  const dataDir = path.join(process.cwd(), 'data');
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-}
-
-function loadServerUsers(): ServerUser[] {
-  ensureDataDirExists();
-  if (fs.existsSync(USERS_FILE_PATH)) {
-    try {
-      const raw = fs.readFileSync(USERS_FILE_PATH, 'utf-8');
-      const users = JSON.parse(raw);
-      if (Array.isArray(users) && users.length > 0) {
-        return users;
-      }
-    } catch (e) {
-      console.error('Error reading users.json:', e);
-    }
-  }
-
-  // Seed initial default users
-  const defaultAdminHash = bcrypt.hashSync('admin123', 10);
-  const defaultUserHash = bcrypt.hashSync('user123', 10);
-
-  const initialUsers: ServerUser[] = [
-    {
-      id: 'usr_admin',
-      username: 'admin',
-      passwordHash: defaultAdminHash,
-      fullName: 'Quản Trị Viên Hệ Thống',
-      position: 'Quản trị viên',
-      notes: 'Tài khoản quản trị cao nhất hệ thống',
-      role: 'admin',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'usr_nhanvien',
-      username: 'nhanvien',
-      passwordHash: defaultUserHash,
-      fullName: 'Nguyễn Văn Kho',
-      position: 'Thủ kho',
-      notes: 'Tài khoản nhân viên vận hành kho',
-      role: 'user',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  try {
-    fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(initialUsers, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Error writing initial users.json:', e);
-  }
-
-  return initialUsers;
-}
-
-function saveServerUsers(users: ServerUser[]) {
-  ensureDataDirExists();
-  try {
-    fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(users, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Error saving users.json:', e);
-  }
-}
-
 function sanitizeUser(u: ServerUser) {
   const { passwordHash, ...safe } = u;
   return safe;
 }
 
-async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: string) {
-  const hashToUse = user.passwordHash || (rawPassword ? bcrypt.hashSync(rawPassword, 10) : undefined);
+function hashPasswordIfNeeded(pass: string): string {
+  if (!pass) return bcrypt.hashSync('12345678', 10);
+  if (pass.startsWith('$2a$') || pass.startsWith('$2b$')) {
+    return pass;
+  }
+  return bcrypt.hashSync(pass, 10);
+}
 
-  // Try MySQL
+function mapDbRowToUser(row: any): ServerUser {
+  return {
+    id: String(row.id),
+    username: String(row.username),
+    passwordHash: String(row.password_hash || row.password || ''),
+    fullName: String(row.full_name || row.fullName || ''),
+    position: String(row.position || ''),
+    notes: String(row.notes || ''),
+    role: row.role === 'admin' ? 'admin' : 'user',
+    status: row.status === 'locked' ? 'locked' : 'active',
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+  };
+}
+
+async function getDbClient() {
   try {
     const conn = await getMySQLConnection({}, true);
-    if (conn) {
+    if (conn) return { type: 'mysql' as const, conn };
+  } catch (e) { }
+
+  try {
+    const pool = await getMSSQLPool({}, true);
+    if (pool) return { type: 'mssql' as const, pool };
+  } catch (e) { }
+
+  return null;
+}
+
+async function ensureUsersTable(db: { type: 'mysql'; conn: any } | { type: 'mssql'; pool: any }) {
+  if (db.type === 'mysql') {
+    await db.conn.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(50) PRIMARY KEY,
+        username VARCHAR(50) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255) NOT NULL,
+        position VARCHAR(255),
+        notes TEXT,
+        role VARCHAR(20) DEFAULT 'user',
+        status VARCHAR(20) DEFAULT 'active',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    const [rows]: any = await db.conn.query('SELECT COUNT(*) as cnt FROM users');
+    if (rows && rows[0] && Number(rows[0].cnt) === 0) {
+      const defaultAdminHash = bcrypt.hashSync('admin123', 10);
+      const defaultUserHash = bcrypt.hashSync('user123', 10);
+      await db.conn.query(`
+        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
+        VALUES 
+          ('usr_admin', 'admin', ?, 'Quản Trị Viên Hệ Thống', 'Quản trị viên', 'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', NOW()),
+          ('usr_nhanvien', 'nhanvien', ?, 'Nguyễn Văn Kho', 'Thủ kho', 'Tài khoản nhân viên vận hành kho', 'user', 'active', NOW());
+      `, [defaultAdminHash, defaultUserHash]);
+    }
+  } else {
+    await db.pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'users')
+      BEGIN
+        CREATE TABLE users (
+          id VARCHAR(50) PRIMARY KEY,
+          username VARCHAR(50) NOT NULL UNIQUE,
+          password_hash NVARCHAR(255) NOT NULL,
+          full_name NVARCHAR(255) NOT NULL,
+          position NVARCHAR(255),
+          notes NVARCHAR(MAX),
+          role VARCHAR(20) DEFAULT 'user',
+          status VARCHAR(20) DEFAULT 'active',
+          created_at DATETIME DEFAULT GETDATE(),
+          updated_at DATETIME DEFAULT GETDATE()
+        );
+      END
+
+      IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password')
+        ALTER TABLE users ALTER COLUMN password NVARCHAR(255) NULL;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password_hash')
+        ALTER TABLE users ADD password_hash NVARCHAR(255) NULL;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'role')
+        ALTER TABLE users ADD role VARCHAR(20) DEFAULT 'user';
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'status')
+        ALTER TABLE users ADD status VARCHAR(20) DEFAULT 'active';
+    `);
+
+    const res = await db.pool.request().query('SELECT COUNT(*) as cnt FROM users');
+    if (res.recordset && res.recordset[0] && Number(res.recordset[0].cnt) === 0) {
+      const defaultAdminHash = bcrypt.hashSync('admin123', 10);
+      const defaultUserHash = bcrypt.hashSync('user123', 10);
+      const req = db.pool.request();
+      req.input('adminHash', mssql.NVarChar(255), defaultAdminHash);
+      req.input('userHash', mssql.NVarChar(255), defaultUserHash);
+      await req.query(`
+        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
+        VALUES 
+          ('usr_admin', 'admin', @adminHash, N'Quản Trị Viên Hệ Thống', N'Quản trị viên', N'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', GETDATE()),
+          ('usr_nhanvien', 'nhanvien', @userHash, N'Nguyễn Văn Kho', N'Thủ kho', N'Tài khoản nhân viên vận hành kho', 'user', 'active', GETDATE());
+      `);
+    }
+  }
+}
+
+async function findUserByUsernameFromDb(username: string): Promise<ServerUser | null> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+
+  await ensureUsersTable(db);
+  const cleanUsername = username.trim().toLowerCase();
+
+  if (db.type === 'mysql') {
+    try {
+      const [rows]: any = await db.conn.execute('SELECT * FROM users WHERE LOWER(username) = ?', [cleanUsername]);
+      await db.conn.end().catch(() => { });
+      if (rows && rows.length > 0) return mapDbRowToUser(rows[0]);
+      return null;
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
+    }
+  } else {
+    try {
+      const req = db.pool.request();
+      req.input('username', mssql.VarChar(50), cleanUsername);
+      const res = await req.query('SELECT * FROM users WHERE LOWER(username) = @username');
+      await db.pool.close().catch(() => { });
+      if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
+      return null;
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
+    }
+  }
+}
+
+async function findUserByIdFromDb(userId: string): Promise<ServerUser | null> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+
+  await ensureUsersTable(db);
+
+  if (db.type === 'mysql') {
+    try {
+      const [rows]: any = await db.conn.execute('SELECT * FROM users WHERE id = ?', [userId]);
+      await db.conn.end().catch(() => { });
+      if (rows && rows.length > 0) return mapDbRowToUser(rows[0]);
+      return null;
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
+    }
+  } else {
+    try {
+      const req = db.pool.request();
+      req.input('id', mssql.VarChar(50), userId);
+      const res = await req.query('SELECT * FROM users WHERE id = @id');
+      await db.pool.close().catch(() => { });
+      if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
+      return null;
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
+    }
+  }
+}
+
+async function getAllUsersFromDb(): Promise<ServerUser[]> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+
+  await ensureUsersTable(db);
+
+  if (db.type === 'mysql') {
+    try {
+      const [rows]: any = await db.conn.query('SELECT * FROM users ORDER BY created_at ASC');
+      await db.conn.end().catch(() => { });
+      return (rows || []).map(mapDbRowToUser);
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
+    }
+  } else {
+    try {
+      const res = await db.pool.request().query('SELECT * FROM users ORDER BY created_at ASC');
+      await db.pool.close().catch(() => { });
+      return (res.recordset || []).map(mapDbRowToUser);
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
+    }
+  }
+}
+
+async function saveUserToDb(user: {
+  id: string;
+  username: string;
+  fullName: string;
+  position?: string;
+  notes?: string;
+  role?: 'admin' | 'user';
+  status?: 'active' | 'locked';
+  passwordHash?: string;
+  password?: string;
+}): Promise<void> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+
+  await ensureUsersTable(db);
+
+  const cleanUsername = user.username.trim().toLowerCase();
+  const rawPass = user.passwordHash || user.password;
+  const hashToUse = rawPass ? hashPasswordIfNeeded(rawPass) : undefined;
+
+  if (db.type === 'mysql') {
+    try {
       if (hashToUse) {
-        await conn.execute(`
+        await db.conn.execute(`
           INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
           ON DUPLICATE KEY UPDATE
@@ -122,7 +270,7 @@ async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: strin
             updated_at = NOW();
         `, [
           user.id,
-          user.username.toLowerCase(),
+          cleanUsername,
           hashToUse,
           user.fullName,
           user.position || '',
@@ -131,9 +279,9 @@ async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: strin
           user.status || 'active',
         ]);
       } else {
-        await conn.execute(`
-          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
-          VALUES (?, ?, 'HASH_PLACEHOLDER', ?, ?, ?, ?, ?, NOW())
+        await db.conn.execute(`
+          INSERT INTO users (id, username, full_name, position, notes, role, status, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
           ON DUPLICATE KEY UPDATE
             full_name = VALUES(full_name),
             position = VALUES(position),
@@ -143,7 +291,7 @@ async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: strin
             updated_at = NOW();
         `, [
           user.id,
-          user.username.toLowerCase(),
+          cleanUsername,
           user.fullName,
           user.position || '',
           user.notes || '',
@@ -151,26 +299,25 @@ async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: strin
           user.status || 'active',
         ]);
       }
-      await conn.end();
+      await db.conn.end().catch(() => { });
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
     }
-  } catch (e) {}
-
-  // Try MSSQL
-  try {
-    const pool = await getMSSQLPool({}, true);
-    if (pool) {
-      const request = pool.request();
-      request.input('id', mssql.VarChar(50), user.id);
-      request.input('username', mssql.VarChar(50), user.username.toLowerCase());
-      request.input('full_name', mssql.NVarChar(255), user.fullName);
-      request.input('position', mssql.NVarChar(255), user.position || '');
-      request.input('notes', mssql.NVarChar(mssql.MAX), user.notes || '');
-      request.input('role', mssql.VarChar(20), user.role || 'user');
-      request.input('status', mssql.VarChar(20), user.status || 'active');
+  } else {
+    try {
+      const req = db.pool.request();
+      req.input('id', mssql.VarChar(50), user.id);
+      req.input('username', mssql.VarChar(50), cleanUsername);
+      req.input('full_name', mssql.NVarChar(255), user.fullName);
+      req.input('position', mssql.NVarChar(255), user.position || '');
+      req.input('notes', mssql.NVarChar(mssql.MAX), user.notes || '');
+      req.input('role', mssql.VarChar(20), user.role || 'user');
+      req.input('status', mssql.VarChar(20), user.status || 'active');
 
       if (hashToUse) {
-        request.input('password_hash', mssql.NVarChar(255), hashToUse);
-        await request.query(`
+        req.input('password_hash', mssql.NVarChar(255), hashToUse);
+        await req.query(`
           IF EXISTS (SELECT 1 FROM users WHERE id = @id)
           BEGIN
             UPDATE users SET
@@ -191,7 +338,7 @@ async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: strin
           END
         `);
       } else {
-        await request.query(`
+        await req.query(`
           IF EXISTS (SELECT 1 FROM users WHERE id = @id)
           BEGIN
             UPDATE users SET
@@ -207,37 +354,145 @@ async function syncUserToDatabasesOnServer(user: ServerUser, rawPassword?: strin
           ELSE
           BEGIN
             INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
-            VALUES (@id, @username, N'HASH_PLACEHOLDER', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+            VALUES (@id, @username, N'', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
           END
         `);
       }
-      await pool.close();
+      await db.pool.close().catch(() => { });
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
     }
-  } catch (e) {}
+  }
 }
 
-async function syncDeleteUserFromDatabasesOnServer(userId: string) {
-  try {
-    const conn = await getMySQLConnection({}, true);
-    if (conn) {
-      await conn.execute('DELETE FROM users WHERE id = ?', [userId]);
-      await conn.end();
-    }
-  } catch (e) {}
+async function deleteUserFromDb(userId: string): Promise<void> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
 
-  try {
-    const pool = await getMSSQLPool({}, true);
-    if (pool) {
-      const request = pool.request();
-      request.input('id', mssql.VarChar(50), userId);
-      await request.query('DELETE FROM users WHERE id = @id');
-      await pool.close();
+  await ensureUsersTable(db);
+
+  if (db.type === 'mysql') {
+    try {
+      await db.conn.execute('DELETE FROM users WHERE id = ?', [userId]);
+      await db.conn.end().catch(() => { });
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
     }
-  } catch (e) {}
+  } else {
+    try {
+      const req = db.pool.request();
+      req.input('id', mssql.VarChar(50), userId);
+      await req.query('DELETE FROM users WHERE id = @id');
+      await db.pool.close().catch(() => { });
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
+    }
+  }
+}
+
+async function updateUserPasswordInDb(userId: string, newPasswordPlain: string): Promise<void> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+
+  await ensureUsersTable(db);
+  const passwordHash = hashPasswordIfNeeded(newPasswordPlain);
+
+  if (db.type === 'mysql') {
+    try {
+      await db.conn.execute('UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?', [passwordHash, userId]);
+      await db.conn.end().catch(() => { });
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
+    }
+  } else {
+    try {
+      const req = db.pool.request();
+      req.input('id', mssql.VarChar(50), userId);
+      req.input('password_hash', mssql.NVarChar(255), passwordHash);
+      await req.query('UPDATE users SET password_hash = @password_hash, updated_at = GETDATE() WHERE id = @id');
+      await db.pool.close().catch(() => { });
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
+    }
+  }
+}
+
+async function updateUserStatusInDb(userId: string, status: 'active' | 'locked'): Promise<void> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+
+  await ensureUsersTable(db);
+
+  if (db.type === 'mysql') {
+    try {
+      await db.conn.execute('UPDATE users SET status = ?, updated_at = NOW() WHERE id = ?', [status, userId]);
+      await db.conn.end().catch(() => { });
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
+    }
+  } else {
+    try {
+      const req = db.pool.request();
+      req.input('id', mssql.VarChar(50), userId);
+      req.input('status', mssql.VarChar(20), status);
+      await req.query('UPDATE users SET status = @status, updated_at = GETDATE() WHERE id = @id');
+      await db.pool.close().catch(() => { });
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
+    }
+  }
+}
+
+async function updateUserProfileInDb(userId: string, data: { fullName?: string; position?: string; notes?: string; role?: 'admin' | 'user' }): Promise<void> {
+  const db = await getDbClient();
+  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+
+  await ensureUsersTable(db);
+
+  if (db.type === 'mysql') {
+    try {
+      const updates: string[] = ['updated_at = NOW()'];
+      const params: any[] = [];
+      if (data.fullName !== undefined) { updates.push('full_name = ?'); params.push(data.fullName); }
+      if (data.position !== undefined) { updates.push('position = ?'); params.push(data.position); }
+      if (data.notes !== undefined) { updates.push('notes = ?'); params.push(data.notes); }
+      if (data.role !== undefined) { updates.push('role = ?'); params.push(data.role); }
+      params.push(userId);
+
+      await db.conn.execute(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+      await db.conn.end().catch(() => { });
+    } catch (err) {
+      await db.conn.end().catch(() => { });
+      throw err;
+    }
+  } else {
+    try {
+      const req = db.pool.request();
+      req.input('id', mssql.VarChar(50), userId);
+      const updates: string[] = ['updated_at = GETDATE()'];
+      if (data.fullName !== undefined) { req.input('full_name', mssql.NVarChar(255), data.fullName); updates.push('full_name = @full_name'); }
+      if (data.position !== undefined) { req.input('position', mssql.NVarChar(255), data.position); updates.push('position = @position'); }
+      if (data.notes !== undefined) { req.input('notes', mssql.NVarChar(mssql.MAX), data.notes); updates.push('notes = @notes'); }
+      if (data.role !== undefined) { req.input('role', mssql.VarChar(20), data.role); updates.push('role = @role'); }
+
+      await req.query(`UPDATE users SET ${updates.join(', ')} WHERE id = @id`);
+      await db.pool.close().catch(() => { });
+    } catch (err) {
+      await db.pool.close().catch(() => { });
+      throw err;
+    }
+  }
 }
 
 // --- AUTH API ROUTES ---
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
@@ -245,8 +500,7 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     const cleanUsername = String(username).trim().toLowerCase();
-    const users = loadServerUsers();
-    const user = users.find((u) => u.username.toLowerCase() === cleanUsername);
+    const user = await findUserByUsernameFromDb(cleanUsername);
 
     if (!user) {
       return res.status(400).json({ success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
@@ -256,7 +510,14 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(400).json({ success: false, message: 'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Quản trị viên!' });
     }
 
-    const isMatch = bcrypt.compareSync(String(password), user.passwordHash);
+    let isMatch = false;
+    if (user.passwordHash && (user.passwordHash.startsWith('$2a$') || user.passwordHash.startsWith('$2b$'))) {
+      isMatch = bcrypt.compareSync(String(password), user.passwordHash);
+    } else if (user.passwordHash && user.passwordHash === String(password)) {
+      isMatch = true;
+      await updateUserPasswordInDb(user.id, String(password)).catch(() => { });
+    }
+
     if (!isMatch) {
       return res.status(400).json({ success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
     }
@@ -274,7 +535,7 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -284,8 +545,11 @@ app.get('/api/auth/me', (req, res) => {
     const parts = token.split('_');
     const userId = parts[1];
 
-    const users = loadServerUsers();
-    const user = users.find((u) => u.id === userId);
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Token không hợp lệ' });
+    }
+
+    const user = await findUserByIdFromDb(userId);
 
     if (!user) {
       return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại' });
@@ -301,30 +565,29 @@ app.get('/api/auth/me', (req, res) => {
   }
 });
 
-app.put('/api/auth/profile', (req, res) => {
+app.put('/api/auth/profile', async (req, res) => {
   try {
     const { userId, fullName, position, notes } = req.body || {};
     if (!userId) {
       return res.status(400).json({ success: false, message: 'Thiếu thông tin tài khoản' });
     }
 
-    const users = loadServerUsers();
-    const userIndex = users.findIndex((u) => u.id === userId);
-
-    if (userIndex === -1) {
+    const user = await findUserByIdFromDb(userId);
+    if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    users[userIndex].fullName = String(fullName || '').trim();
-    users[userIndex].position = String(position || '').trim();
-    users[userIndex].notes = String(notes || '').trim();
-    users[userIndex].updatedAt = new Date().toISOString();
+    await updateUserProfileInDb(userId, {
+      fullName: String(fullName || '').trim(),
+      position: String(position || '').trim(),
+      notes: String(notes || '').trim(),
+    });
 
-    saveServerUsers(users);
+    const updatedUser = await findUserByIdFromDb(userId);
 
     res.json({
       success: true,
-      user: sanitizeUser(users[userIndex]),
+      user: sanitizeUser(updatedUser!),
       message: 'Cập nhật thông tin cá nhân thành công',
     });
   } catch (err: any) {
@@ -332,7 +595,7 @@ app.put('/api/auth/profile', (req, res) => {
   }
 });
 
-app.put('/api/auth/change-password', (req, res) => {
+app.put('/api/auth/change-password', async (req, res) => {
   try {
     const { userId, currentPassword, newPassword, confirmPassword } = req.body || {};
 
@@ -348,24 +611,23 @@ app.put('/api/auth/change-password', (req, res) => {
       return res.status(400).json({ success: false, message: 'Xác nhận mật khẩu mới không trùng khớp' });
     }
 
-    const users = loadServerUsers();
-    const userIndex = users.findIndex((u) => u.id === userId);
-
-    if (userIndex === -1) {
+    const user = await findUserByIdFromDb(userId);
+    if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
     }
 
-    const user = users[userIndex];
-    const isCurrentValid = bcrypt.compareSync(String(currentPassword), user.passwordHash);
+    let isCurrentValid = false;
+    if (user.passwordHash && (user.passwordHash.startsWith('$2a$') || user.passwordHash.startsWith('$2b$'))) {
+      isCurrentValid = bcrypt.compareSync(String(currentPassword), user.passwordHash);
+    } else {
+      isCurrentValid = user.passwordHash === String(currentPassword);
+    }
 
     if (!isCurrentValid) {
       return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
     }
 
-    users[userIndex].passwordHash = bcrypt.hashSync(String(newPassword), 10);
-    users[userIndex].updatedAt = new Date().toISOString();
-
-    saveServerUsers(users);
+    await updateUserPasswordInDb(userId, String(newPassword));
 
     res.json({
       success: true,
@@ -378,53 +640,7 @@ app.put('/api/auth/change-password', (req, res) => {
 
 app.get('/api/users', async (req, res) => {
   try {
-    let users = loadServerUsers();
-
-    try {
-      const conn = await getMySQLConnection({}, true);
-      if (conn) {
-        const [uRows]: any = await conn.query('SELECT * FROM users');
-        await conn.end();
-        if (uRows && uRows.length > 0) {
-          users = uRows.map((row: any) => ({
-            id: String(row.id),
-            username: String(row.username),
-            passwordHash: String(row.password_hash || ''),
-            fullName: String(row.full_name || row.fullName || ''),
-            position: String(row.position || ''),
-            notes: String(row.notes || ''),
-            role: row.role === 'admin' ? 'admin' : 'user',
-            status: row.status === 'locked' ? 'locked' : 'active',
-            createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
-            updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
-          }));
-          saveServerUsers(users);
-        }
-      }
-    } catch (e) {
-      try {
-        const pool = await getMSSQLPool({}, true);
-        if (pool) {
-          const uRes = await pool.request().query('SELECT * FROM users');
-          await pool.close();
-          if (uRes.recordset && uRes.recordset.length > 0) {
-            users = uRes.recordset.map((row: any) => ({
-              id: String(row.id),
-              username: String(row.username),
-              passwordHash: String(row.password_hash || ''),
-              fullName: String(row.full_name || row.fullName || ''),
-              position: String(row.position || ''),
-              notes: String(row.notes || ''),
-              role: row.role === 'admin' ? 'admin' : 'user',
-              status: row.status === 'locked' ? 'locked' : 'active',
-              createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
-              updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
-            }));
-            saveServerUsers(users);
-          }
-        }
-      } catch (e2) {}
-    }
+    const users = await getAllUsersFromDb();
 
     res.json({
       success: true,
@@ -452,8 +668,8 @@ app.post('/api/users', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Mật khẩu phải từ 8 ký tự trở lên' });
     }
 
-    const users = loadServerUsers();
-    if (users.some((u) => u.username.toLowerCase() === cleanUsername)) {
+    const existing = await findUserByUsernameFromDb(cleanUsername);
+    if (existing) {
       return res.status(400).json({ success: false, message: 'Tên đăng nhập này đã tồn tại trong hệ thống' });
     }
 
@@ -469,9 +685,7 @@ app.post('/api/users', async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    users.push(newUser);
-    saveServerUsers(users);
-    syncUserToDatabasesOnServer(newUser, String(password)).catch(() => {});
+    await saveUserToDb(newUser);
 
     res.json({
       success: true,
@@ -492,21 +706,17 @@ app.put('/api/users/:id/status', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Trạng thái không hợp lệ' });
     }
 
-    const users = loadServerUsers();
-    const userIndex = users.findIndex((u) => u.id === id);
-
-    if (userIndex === -1) {
+    const user = await findUserByIdFromDb(id);
+    if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    users[userIndex].status = status;
-    users[userIndex].updatedAt = new Date().toISOString();
-    saveServerUsers(users);
-    syncUserToDatabasesOnServer(users[userIndex]).catch(() => {});
+    await updateUserStatusInDb(id, status);
+    const updatedUser = await findUserByIdFromDb(id);
 
     res.json({
       success: true,
-      user: sanitizeUser(users[userIndex]),
+      user: sanitizeUser(updatedUser!),
       message: status === 'locked' ? 'Đã khóa tài khoản' : 'Đã mở khóa tài khoản',
     });
   } catch (err: any) {
@@ -523,17 +733,12 @@ app.put('/api/users/:id/reset-password', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Mật khẩu mới phải từ 8 ký tự trở lên' });
     }
 
-    const users = loadServerUsers();
-    const userIndex = users.findIndex((u) => u.id === id);
-
-    if (userIndex === -1) {
+    const user = await findUserByIdFromDb(id);
+    if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    users[userIndex].passwordHash = bcrypt.hashSync(String(newPassword), 10);
-    users[userIndex].updatedAt = new Date().toISOString();
-    saveServerUsers(users);
-    syncUserToDatabasesOnServer(users[userIndex], String(newPassword)).catch(() => {});
+    await updateUserPasswordInDb(id, String(newPassword));
 
     res.json({
       success: true,
@@ -549,25 +754,23 @@ app.put('/api/users/:id', async (req, res) => {
     const { id } = req.params;
     const { fullName, position, notes, role } = req.body;
 
-    const users = loadServerUsers();
-    const userIndex = users.findIndex((u) => u.id === id);
-
-    if (userIndex === -1) {
+    const user = await findUserByIdFromDb(id);
+    if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    if (fullName) users[userIndex].fullName = String(fullName).trim();
-    if (position) users[userIndex].position = String(position).trim();
-    if (notes !== undefined) users[userIndex].notes = String(notes).trim();
-    if (role === 'admin' || role === 'user') users[userIndex].role = role;
+    await updateUserProfileInDb(id, {
+      fullName: fullName ? String(fullName).trim() : undefined,
+      position: position ? String(position).trim() : undefined,
+      notes: notes !== undefined ? String(notes).trim() : undefined,
+      role: (role === 'admin' || role === 'user') ? role : undefined,
+    });
 
-    users[userIndex].updatedAt = new Date().toISOString();
-    saveServerUsers(users);
-    syncUserToDatabasesOnServer(users[userIndex]).catch(() => {});
+    const updatedUser = await findUserByIdFromDb(id);
 
     res.json({
       success: true,
-      user: sanitizeUser(users[userIndex]),
+      user: sanitizeUser(updatedUser!),
       message: 'Cập nhật thông tin tài khoản thành công',
     });
   } catch (err: any) {
@@ -578,15 +781,12 @@ app.put('/api/users/:id', async (req, res) => {
 app.delete('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const users = loadServerUsers();
-    const filtered = users.filter((u) => u.id !== id);
-
-    if (filtered.length === users.length) {
+    const user = await findUserByIdFromDb(id);
+    if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản để xóa' });
     }
 
-    saveServerUsers(filtered);
-    syncDeleteUserFromDatabasesOnServer(id).catch(() => {});
+    await deleteUserFromDb(id);
 
     res.json({ success: true, message: 'Xóa tài khoản thành công' });
   } catch (err: any) {
@@ -650,7 +850,7 @@ app.post('/api/mysql/test', async (req, res) => {
     });
   } catch (err: any) {
     if (conn) {
-      try { await conn.end(); } catch (_) {}
+      try { await conn.end(); } catch (_) { }
     }
     console.error('MySQL Test Connection Error:', err);
     res.status(400).json({
@@ -821,7 +1021,7 @@ app.post('/api/mysql/init-tables', async (req, res) => {
     });
   } catch (err: any) {
     if (conn) {
-      try { await conn.end(); } catch (_) {}
+      try { await conn.end(); } catch (_) { }
     }
     console.error('MySQL Init Tables Error:', err);
     res.status(400).json({
@@ -868,7 +1068,7 @@ app.post('/api/mysql/fetch-all', async (req, res) => {
     });
   } catch (err: any) {
     if (conn) {
-      try { await conn.end(); } catch (_) {}
+      try { await conn.end(); } catch (_) { }
     }
     console.error('MySQL Fetch All Error:', err);
     res.status(400).json({
@@ -923,7 +1123,7 @@ app.post('/api/mysql/save-item', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -938,7 +1138,7 @@ app.post('/api/mysql/delete-item', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -973,7 +1173,7 @@ app.post('/api/mysql/save-warehouse', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -988,7 +1188,7 @@ app.post('/api/mysql/delete-warehouse', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1017,7 +1217,7 @@ app.post('/api/mysql/save-category', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1032,7 +1232,7 @@ app.post('/api/mysql/delete-category', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1058,7 +1258,7 @@ app.post('/api/mysql/save-unit', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1073,7 +1273,7 @@ app.post('/api/mysql/delete-unit', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1170,7 +1370,34 @@ app.post('/api/mysql/save-voucher', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 13. Delete Voucher (MySQL)
+app.post('/api/mysql/delete-voucher', async (req, res) => {
+  let conn;
+  try {
+    const { config, id, updatedItems } = req.body;
+    conn = await getMySQLConnection(config, true);
+
+    await conn.execute('DELETE FROM stock_voucher_items WHERE voucher_id = ?', [id]);
+    await conn.execute('DELETE FROM inventory_logs WHERE voucher_id = ?', [id]);
+    await conn.execute('DELETE FROM stock_vouchers WHERE id = ?', [id]);
+
+    for (const item of updatedItems || []) {
+      await conn.execute(`
+        UPDATE items
+        SET stock_quantity = ?, updated_at = NOW()
+        WHERE id = ?;
+      `, [item.stockQuantity, item.id]);
+    }
+
+    await conn.end();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1239,7 +1466,7 @@ app.post('/api/mssql/test', async (req, res) => {
     });
   } catch (err: any) {
     if (pool) {
-      try { await pool.close(); } catch (_) {}
+      try { await pool.close(); } catch (_) { }
     }
     console.error('SQL Server Test Connection Error:', err);
     res.status(400).json({
@@ -1407,7 +1634,7 @@ app.post('/api/mssql/init-tables', async (req, res) => {
     });
   } catch (err: any) {
     if (pool) {
-      try { await pool.close(); } catch (_) {}
+      try { await pool.close(); } catch (_) { }
     }
     console.error('SQL Server Init Tables Error:', err);
     res.status(400).json({
@@ -1454,7 +1681,7 @@ app.post('/api/mssql/fetch-all', async (req, res) => {
     });
   } catch (err: any) {
     if (pool) {
-      try { await pool.close(); } catch (_) {}
+      try { await pool.close(); } catch (_) { }
     }
     console.error('SQL Server Fetch All Error:', err);
     res.status(400).json({
@@ -1515,7 +1742,7 @@ app.post('/api/mssql/save-item', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1532,7 +1759,7 @@ app.post('/api/mssql/delete-item', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1576,7 +1803,7 @@ app.post('/api/mssql/save-warehouse', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1593,7 +1820,7 @@ app.post('/api/mssql/delete-warehouse', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1631,7 +1858,7 @@ app.post('/api/mssql/save-category', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1648,7 +1875,7 @@ app.post('/api/mssql/delete-category', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1683,7 +1910,7 @@ app.post('/api/mssql/save-unit', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1700,7 +1927,7 @@ app.post('/api/mssql/delete-unit', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1814,7 +2041,45 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Delete Voucher (MSSQL)
+app.post('/api/mssql/delete-voucher', async (req, res) => {
+  let pool;
+  try {
+    const { config, id, updatedItems } = req.body;
+    pool = await getMSSQLPool(config, true);
+
+    const reqDelItems = pool.request();
+    reqDelItems.input('voucher_id', mssql.VarChar(50), id);
+    await reqDelItems.query('DELETE FROM stock_voucher_items WHERE voucher_id = @voucher_id');
+
+    const reqDelLogs = pool.request();
+    reqDelLogs.input('voucher_id', mssql.VarChar(50), id);
+    await reqDelLogs.query('DELETE FROM inventory_logs WHERE voucher_id = @voucher_id');
+
+    const reqDelVoucher = pool.request();
+    reqDelVoucher.input('id', mssql.VarChar(50), id);
+    await reqDelVoucher.query('DELETE FROM stock_vouchers WHERE id = @id');
+
+    for (const item of updatedItems || []) {
+      const reqStock = pool.request();
+      reqStock.input('id', mssql.VarChar(50), item.id);
+      reqStock.input('stock_quantity', mssql.Int, item.stockQuantity || 0);
+      await reqStock.query(`
+        UPDATE items
+        SET stock_quantity = @stock_quantity, updated_at = GETDATE()
+        WHERE id = @id;
+      `);
+    }
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1826,7 +2091,9 @@ app.post('/api/mysql/save-user', async (req, res) => {
     const { config, user, passwordHash } = req.body;
     conn = await getMySQLConnection(config, true);
 
-    if (passwordHash) {
+    const rawPass = passwordHash || user?.passwordHash || user?.password;
+    if (rawPass) {
+      const encryptedHash = hashPasswordIfNeeded(rawPass);
       const sql = `
         INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
@@ -1843,7 +2110,7 @@ app.post('/api/mysql/save-user', async (req, res) => {
       await conn.execute(sql, [
         user.id,
         user.username.toLowerCase(),
-        passwordHash,
+        encryptedHash,
         user.fullName,
         user.position || '',
         user.notes || '',
@@ -1852,8 +2119,8 @@ app.post('/api/mysql/save-user', async (req, res) => {
       ]);
     } else {
       const sql = `
-        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
-        VALUES (?, ?, 'HASH_PLACEHOLDER', ?, ?, ?, ?, ?, NOW())
+        INSERT INTO users (id, username, full_name, position, notes, role, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           full_name = VALUES(full_name),
           position = VALUES(position),
@@ -1876,7 +2143,7 @@ app.post('/api/mysql/save-user', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1891,7 +2158,7 @@ app.post('/api/mysql/delete-user', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) {} }
+    if (conn) { try { await conn.end(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1912,8 +2179,10 @@ app.post('/api/mssql/save-user', async (req, res) => {
     request.input('role', mssql.VarChar(20), user.role || 'user');
     request.input('status', mssql.VarChar(20), user.status || 'active');
 
-    if (passwordHash) {
-      request.input('password_hash', mssql.NVarChar(255), passwordHash);
+    const rawPass = passwordHash || user?.passwordHash || user?.password;
+    if (rawPass) {
+      const encryptedHash = hashPasswordIfNeeded(rawPass);
+      request.input('password_hash', mssql.NVarChar(255), encryptedHash);
       await request.query(`
         IF EXISTS (SELECT 1 FROM users WHERE id = @id)
         BEGIN
@@ -1951,7 +2220,7 @@ app.post('/api/mssql/save-user', async (req, res) => {
         ELSE
         BEGIN
           INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
-          VALUES (@id, @username, N'HASH_PLACEHOLDER', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+          VALUES (@id, @username, N'', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
         END
       `);
     }
@@ -1959,7 +2228,7 @@ app.post('/api/mssql/save-user', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1976,7 +2245,7 @@ app.post('/api/mssql/delete-user', async (req, res) => {
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
-    if (pool) { try { await pool.close(); } catch (_) {} }
+    if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
 });

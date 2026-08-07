@@ -377,3 +377,19 @@ export async function saveVoucherToMySQL(
     console.error('Error saving voucher to MySQL:', err);
   }
 }
+
+export async function deleteVoucherFromMySQL(
+  config: MySQLConfig,
+  id: string,
+  updatedItems: Item[]
+) {
+  try {
+    await fetch('/api/mysql/delete-voucher', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, id, updatedItems }),
+    });
+  } catch (err) {
+    console.error('Error deleting voucher from MySQL:', err);
+  }
+}
