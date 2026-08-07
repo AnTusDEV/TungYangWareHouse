@@ -9,6 +9,7 @@ interface ModalProps {
   description?: string;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | 'full';
+  minHeight?: string;
   footer?: React.ReactNode;
 }
 
@@ -19,6 +20,7 @@ export function Modal({
   description,
   children,
   maxWidth = 'lg',
+  minHeight,
   footer,
 }: ModalProps) {
   useEffect(() => {
@@ -64,7 +66,7 @@ export function Modal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ type: 'spring', duration: 0.3 }}
-            className={`relative w-full ${maxWidthClasses[maxWidth]} rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden my-auto z-10 flex flex-col max-h-[90vh]`}
+            className={`relative w-full ${maxWidthClasses[maxWidth]} ${minHeight || ''} rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden my-auto z-10 flex flex-col max-h-[92vh]`}
           >
             {/* Modal Header */}
             <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 p-5 pb-4">

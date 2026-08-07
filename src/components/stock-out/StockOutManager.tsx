@@ -15,6 +15,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { StockVoucher } from '../../types/inventory';
 import { Modal } from '../common/Modal';
 import { DataTable, Column } from '../common/DataTable';
@@ -26,6 +27,9 @@ import {
 } from '../../lib/formatters';
 
 export function StockOutManager() {
+  const { currentUser } = useAuthStore();
+  const currentUserName = currentUser?.fullName || currentUser?.username || 'Admin';
+
   const { items, warehouses, vouchers, createStockOutVoucher } = useInventoryStore();
 
   const outboundVouchers = vouchers.filter((v) => v.type === 'OUT');
@@ -36,7 +40,7 @@ export function StockOutManager() {
 
   // Form State
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [person, setPerson] = useState<string>('Trần Thị Mai');
+  const [person, setPerson] = useState<string>(currentUserName);
   const [department, setDepartment] = useState<string>('Phòng Hành chính Nhân sự');
   const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || 'wh-1');
   const [note, setNote] = useState<string>('Cấp phát văn phòng phẩm định kỳ');
@@ -60,7 +64,7 @@ export function StockOutManager() {
     setIsCreating(true);
     setAlertInfo(null);
     setDate(new Date().toISOString().split('T')[0]);
-    setPerson('Trần Thị Mai');
+    setPerson(currentUserName);
     setDepartment('Phòng Hành chính Nhân sự');
     setWarehouseId(warehouses[0]?.id || 'wh-1');
     setNote('Cấp phát văn phòng phẩm');
@@ -255,6 +259,7 @@ export function StockOutManager() {
         onClose={() => setIsCreating(false)}
         title="Tạo Phiếu Xuất Kho / Cấp Phát Vật Tư"
         maxWidth="4xl"
+        minHeight="min-h-[550px] sm:min-h-[650px]"
         footer={
           <>
             <button
@@ -310,15 +315,15 @@ export function StockOutManager() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Người Nhận Hàng
+                Người Lập Phiếu
               </label>
               <input
                 type="text"
-                required
+                readOnly
+                disabled
                 value={person}
-                onChange={(e) => setPerson(e.target.value)}
-                placeholder="VD: Nguyễn Văn B"
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-rose-500 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-not-allowed opacity-90"
+                title="Tài khoản đăng nhập hiện tại (không thể chỉnh sửa)"
               />
             </div>
 

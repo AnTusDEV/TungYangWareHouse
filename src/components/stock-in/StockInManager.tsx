@@ -16,6 +16,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { StockVoucher } from '../../types/inventory';
 import { Modal } from '../common/Modal';
 import { ConfirmDialog } from '../common/ConfirmDialog';
@@ -53,6 +54,9 @@ function get24hStatus(voucher: StockVoucher): {
 }
 
 export function StockInManager() {
+  const { currentUser } = useAuthStore();
+  const currentUserName = currentUser?.fullName || currentUser?.username || 'Admin';
+
   const {
     items,
     warehouses,
@@ -72,7 +76,7 @@ export function StockInManager() {
 
   // Form State
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [person, setPerson] = useState<string>('Nguyễn Văn Tuấn');
+  const [person, setPerson] = useState<string>(currentUserName);
   const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || 'wh-1');
   const [note, setNote] = useState<string>('');
 
@@ -85,7 +89,7 @@ export function StockInManager() {
     setEditingVoucher(null);
     setAlertInfo(null);
     setDate(new Date().toISOString().split('T')[0]);
-    setPerson('Nguyễn Văn Tuấn');
+    setPerson(currentUserName);
     setWarehouseId(warehouses[0]?.id || 'wh-1');
     setNote('');
     if (items.length > 0) {
@@ -404,6 +408,7 @@ export function StockInManager() {
         }}
         title={editingVoucher ? `Chỉnh Sửa Phiếu Nhập Kho: ${editingVoucher.code}` : 'Tạo Phiếu Nhập Kho Mới'}
         maxWidth="4xl"
+        minHeight="min-h-[550px] sm:min-h-[650px]"
         footer={
           <>
             <button
@@ -475,11 +480,11 @@ export function StockInManager() {
               </label>
               <input
                 type="text"
-                required
+                readOnly
+                disabled
                 value={person}
-                onChange={(e) => setPerson(e.target.value)}
-                placeholder="VD: Nguyễn Văn A"
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-not-allowed opacity-90"
+                title="Tài khoản đăng nhập hiện tại (không thể chỉnh sửa)"
               />
             </div>
 
