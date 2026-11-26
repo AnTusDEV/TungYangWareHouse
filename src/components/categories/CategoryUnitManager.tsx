@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Boxes, Plus, Edit2, Trash2, Layers, Tag, Eye } from 'lucide-react';
+import { Boxes, Plus, Edit2, Trash2, Layers, Tag, Eye, RefreshCw } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { Category, Unit } from '../../types/inventory';
 import { Modal } from '../common/Modal';
@@ -17,6 +17,7 @@ export function CategoryUnitManager() {
     addUnit,
     updateUnit,
     deleteUnit,
+    syncMissingCategoriesFromItems,
   } = useInventoryStore();
 
   const [activeSubTab, setActiveSubTab] = useState<'categories' | 'units'>('categories');
@@ -153,77 +154,118 @@ export function CategoryUnitManager() {
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
               Danh Sách Nhóm Hàng Hóa
             </h3>
-            <button
-              onClick={handleOpenAddCat}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Thêm Nhóm Hàng</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const res = syncMissingCategoriesFromItems();
+                  if (res.addedCats > 0 || res.addedUnits > 0) {
+                    alert(`Đã khôi phục thành công ${res.addedCats} nhóm hàng và ${res.addedUnits} đơn vị tính từ danh mục sản phẩm!`);
+                  } else {
+                    alert('Tất cả nhóm hàng và đơn vị tính đã được đồng bộ đầy đủ từ sản phẩm!');
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm transition-all"
+                title="Quét lại sản phẩm và tự động khôi phục các nhóm hàng còn thiếu"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Đồng Bộ Từ Sản Phẩm</span>
+              </button>
+              <button
+                onClick={handleOpenAddCat}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Thêm Nhóm Hàng</span>
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {categories.map((cat) => {
-              const catItemsCount = items.filter((i) => i.categoryId === cat.id).length;
-              return (
-                <div
-                  key={cat.id}
-                  className="flex flex-col justify-between p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:border-cyan-500/40 transition-colors"
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-slate-100 dark:bg-slate-800 text-cyan-600 dark:text-cyan-400">
-                        {cat.code}
-                      </span>
+          {categories.length === 0 ? (
+            <div className="p-12 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50">
+              <Boxes className="h-12 w-12 text-slate-400 mx-auto mb-3 opacity-60" />
+              <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-1">
+                Chưa có nhóm hàng hóa nào
+              </h4>
+              <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
+                Các sản phẩm đã có nhóm hàng nhưng danh mục hệ thống chưa được đồng bộ. Bấm nút dưới đây để khôi phục ngay lập tức!
+              </p>
+              <button
+                onClick={() => {
+                  const res = syncMissingCategoriesFromItems();
+                  alert(`Đã khôi phục thành công ${res.addedCats} nhóm hàng từ sản phẩm!`);
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-600/20"
+              >
+                <RefreshCw className="h-4 w-4" />
+                <span>Khôi Phục Nhóm Hàng Từ Sản Phẩm</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {categories.map((cat) => {
+                const catItemsCount = items.filter(
+                  (i) => i.categoryId === cat.id || (cat.name && i.categoryName?.trim().toLowerCase() === cat.name.trim().toLowerCase())
+                ).length;
+                return (
+                  <div
+                    key={cat.id}
+                    className="flex flex-col justify-between p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:border-cyan-500/40 transition-colors"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-slate-100 dark:bg-slate-800 text-cyan-600 dark:text-cyan-400">
+                          {cat.code}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setSelectedCategoryModal(cat)}
+                            className="p-1 rounded text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Xem danh sách sản phẩm thuộc nhóm này"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditCat(cat)}
+                            className="p-1 rounded text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Sửa nhóm hàng"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setDeletingCatId(cat.id)}
+                            className="p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Xóa nhóm hàng"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <h4
+                        onClick={() => setSelectedCategoryModal(cat)}
+                        className="font-bold text-slate-900 dark:text-slate-100 text-sm mb-1 cursor-pointer hover:text-cyan-500 transition-colors flex items-center gap-1.5"
+                      >
+                        <span>{cat.name}</span>
+                      </h4>
+                      <p className="text-xs text-slate-500 line-clamp-2">{cat.description || 'Chưa có mô tả'}</p>
+                    </div>
+
+                    <div
+                      onClick={() => setSelectedCategoryModal(cat)}
+                      className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-slate-400 cursor-pointer hover:text-cyan-500 transition-colors group/btn"
+                    >
+                      <span>Số mặt hàng:</span>
                       <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => setSelectedCategoryModal(cat)}
-                          className="p-1 rounded text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="Xem danh sách sản phẩm thuộc nhóm này"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleOpenEditCat(cat)}
-                          className="p-1 rounded text-slate-400 hover:text-cyan-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="Sửa nhóm hàng"
-                        >
-                          <Edit2 className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => setDeletingCatId(cat.id)}
-                          className="p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="Xóa nhóm hàng"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <strong className="text-slate-800 dark:text-slate-200 group-hover/btn:text-cyan-500 transition-colors">
+                          {catItemsCount} sản phẩm
+                        </strong>
+                        <Eye className="h-3 w-3 text-cyan-500 opacity-80" />
                       </div>
                     </div>
-                    <h4
-                      onClick={() => setSelectedCategoryModal(cat)}
-                      className="font-bold text-slate-900 dark:text-slate-100 text-sm mb-1 cursor-pointer hover:text-cyan-500 transition-colors flex items-center gap-1.5"
-                    >
-                      <span>{cat.name}</span>
-                    </h4>
-                    <p className="text-xs text-slate-500 line-clamp-2">{cat.description || 'Chưa có mô tả'}</p>
                   </div>
-
-                  <div
-                    onClick={() => setSelectedCategoryModal(cat)}
-                    className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-slate-400 cursor-pointer hover:text-cyan-500 transition-colors group/btn"
-                  >
-                    <span>Số mặt hàng:</span>
-                    <div className="flex items-center gap-1">
-                      <strong className="text-slate-800 dark:text-slate-200 group-hover/btn:text-cyan-500 transition-colors">
-                        {catItemsCount} sản phẩm
-                      </strong>
-                      <Eye className="h-3 w-3 text-cyan-500 opacity-80" />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -234,18 +276,37 @@ export function CategoryUnitManager() {
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
               Danh Sách Đơn Vị Tính Linh Hoạt
             </h3>
-            <button
-              onClick={handleOpenAddUnit}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Thêm Đơn Vị Mới</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const res = syncMissingCategoriesFromItems();
+                  if (res.addedUnits > 0) {
+                    alert(`Đã khôi phục thành công ${res.addedUnits} đơn vị tính từ danh mục sản phẩm!`);
+                  } else {
+                    alert('Tất cả đơn vị tính đã được đồng bộ đầy đủ!');
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm transition-all"
+                title="Quét lại sản phẩm và tự động khôi phục các đơn vị tính còn thiếu"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Đồng Bộ Từ Sản Phẩm</span>
+              </button>
+              <button
+                onClick={handleOpenAddUnit}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Thêm Đơn Vị Mới</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {units.map((u) => {
-              const unitItemsCount = items.filter((i) => i.unitId === u.id).length;
+              const unitItemsCount = items.filter(
+                (i) => i.unitId === u.id || (u.name && i.unitName?.trim().toLowerCase() === u.name.trim().toLowerCase())
+              ).length;
               return (
                 <div
                   key={u.id}

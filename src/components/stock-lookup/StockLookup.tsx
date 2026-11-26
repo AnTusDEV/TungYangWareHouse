@@ -16,8 +16,18 @@ export function StockLookup() {
   // Filtered List
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      if (selectedCategory !== 'ALL' && item.categoryId !== selectedCategory) return false;
-      if (selectedWarehouse !== 'ALL' && item.warehouseId !== selectedWarehouse) return false;
+      if (selectedCategory !== 'ALL') {
+        const catObj = categories.find((c) => c.id === selectedCategory);
+        const matchId = item.categoryId === selectedCategory;
+        const matchName = catObj && item.categoryName && item.categoryName.trim().toLowerCase() === catObj.name.trim().toLowerCase();
+        if (!matchId && !matchName) return false;
+      }
+      if (selectedWarehouse !== 'ALL') {
+        const whObj = warehouses.find((w) => w.id === selectedWarehouse);
+        const matchId = item.warehouseId === selectedWarehouse;
+        const matchName = whObj && item.warehouseName && item.warehouseName.trim().toLowerCase() === whObj.name.trim().toLowerCase();
+        if (!matchId && !matchName) return false;
+      }
 
       if (selectedStockStatus === 'OUT') return item.stockQuantity <= 0;
       if (selectedStockStatus === 'HIGH') return item.maxStockLevel && item.stockQuantity >= item.maxStockLevel;

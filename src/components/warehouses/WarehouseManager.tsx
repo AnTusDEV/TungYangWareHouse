@@ -102,7 +102,11 @@ export function WarehouseManager() {
       {/* Warehouse Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {warehouses.map((wh) => {
-          const whItems = items.filter((i) => i.warehouseId === wh.id);
+          const whItems = items.filter(
+            (i) =>
+              i.warehouseId === wh.id ||
+              (wh.name && i.warehouseName?.trim().toLowerCase() === wh.name.trim().toLowerCase())
+          );
           const totalQty = whItems.reduce((sum, i) => sum + i.stockQuantity, 0);
 
           return (

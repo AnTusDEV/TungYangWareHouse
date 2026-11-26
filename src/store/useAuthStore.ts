@@ -21,13 +21,11 @@ import {
 } from '../lib/authApi';
 import { useInventoryStore } from './useInventoryStore';
 import { saveUserToSQLServer, deleteUserFromSQLServer } from '../lib/sqlServerSync';
-import { saveUserToMySQL, deleteUserFromMySQL } from '../lib/mysqlSync';
 
 function syncUserToDB(user: User, passwordHash?: string) {
   try {
     const invState = useInventoryStore.getState();
     saveUserToSQLServer(invState.sqlServerConfig, user, passwordHash);
-    saveUserToMySQL(invState.mysqlConfig, user, passwordHash);
   } catch (e) {}
 }
 
@@ -35,7 +33,6 @@ function syncDeleteUserFromDB(userId: string) {
   try {
     const invState = useInventoryStore.getState();
     deleteUserFromSQLServer(invState.sqlServerConfig, userId);
-    deleteUserFromMySQL(invState.mysqlConfig, userId);
   } catch (e) {}
 }
 
@@ -155,11 +152,6 @@ export const useAuthStore = create<AuthState>()(
           const invState = useInventoryStore.getState();
           if (invState.isSQLServerConnected) {
             await invState.fetchFromSQLServer();
-            set({ isLoading: false });
-            return;
-          }
-          if (invState.isMySQLConnected) {
-            await invState.fetchFromMySQL();
             set({ isLoading: false });
             return;
           }

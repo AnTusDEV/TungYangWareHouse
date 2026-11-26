@@ -16,37 +16,6 @@ import {
   generateVoucherCode,
 } from '../lib/formatters';
 import {
-  fetchAllFromSupabase,
-  saveItemToSupabase,
-  deleteItemFromSupabase,
-  saveWarehouseToSupabase,
-  deleteWarehouseFromSupabase,
-  saveCategoryToSupabase,
-  deleteCategoryFromSupabase,
-  saveUnitToSupabase,
-  deleteUnitFromSupabase,
-  saveVoucherToSupabase,
-} from '../lib/supabaseSync';
-import {
-  MySQLConfig,
-  DEFAULT_MYSQL_CONFIG,
-  getStoredMySQLConfig,
-  saveStoredMySQLConfig,
-  testMySQLConnection,
-  initMySQLTables,
-  fetchAllFromMySQL,
-  saveItemToMySQL,
-  deleteItemFromMySQL,
-  saveWarehouseToMySQL,
-  deleteWarehouseFromMySQL,
-  saveCategoryToMySQL,
-  deleteCategoryFromMySQL,
-  saveUnitToMySQL,
-  deleteUnitFromMySQL,
-  saveVoucherToMySQL,
-  deleteVoucherFromMySQL,
-} from '../lib/mysqlSync';
-import {
   SQLServerConfig,
   getStoredSQLServerConfig,
   saveStoredSQLServerConfig,
@@ -84,28 +53,12 @@ interface InventoryState {
   testSQLServerConfig: (config?: SQLServerConfig) => Promise<{ success: boolean; message: string }>;
   initSQLServerDb: (config?: SQLServerConfig) => Promise<{ success: boolean; message: string }>;
 
-  // MySQL State
-  mysqlConfig: MySQLConfig;
-  setMysqlConfig: (config: MySQLConfig) => void;
-  isLoadingFromMySQL: boolean;
-  isMySQLConnected: boolean;
-  mysqlError: string | null;
-  fetchFromMySQL: () => Promise<void>;
-  testMySQLConfig: (config?: MySQLConfig) => Promise<{ success: boolean; message: string }>;
-  initMySQLDb: (config?: MySQLConfig) => Promise<{ success: boolean; message: string }>;
-
   // Password Lock State for Settings
   adminPassword: string;
   isSettingsUnlocked: boolean;
   verifySettingsPassword: (password: string) => boolean;
   changeAdminPassword: (oldPass: string, newPass: string) => { success: boolean; message: string };
   lockSettings: () => void;
-
-  // Supabase State
-  isLoadingFromSupabase: boolean;
-  isSupabaseConnected: boolean;
-  supabaseError: string | null;
-  fetchFromSupabase: () => Promise<void>;
 
   // Master Data
   warehouses: Warehouse[];
@@ -135,11 +88,13 @@ interface InventoryState {
   updateItem: (id: string, itemData: Partial<Item>) => void;
   deleteItem: (id: string) => boolean;
   importItems: (importedItems: Partial<Item>[]) => { successCount: number; errorCount: number };
+  syncMissingCategoriesFromItems: () => { addedCats: number; addedUnits: number; addedWarehouses: number };
 
   // Actions - Vouchers (Inbound / Outbound)
   createStockInVoucher: (data: {
     date: string;
     person: string;
+    department?: string;
     warehouseId: string;
     note?: string;
     items: { itemId: string; quantity: number }[];
@@ -150,6 +105,7 @@ interface InventoryState {
     data: {
       date: string;
       person: string;
+      department?: string;
       warehouseId: string;
       note?: string;
       items: { itemId: string; quantity: number }[];
@@ -170,428 +126,99 @@ interface InventoryState {
   deleteVoucher: (id: string) => void;
 
   // Utility
-  resetToMockData: () => void;
-  clearAllDemoData: () => void;
+  clearLocalData: () => void;
 }
 
-// Initial Default Mock Data
-const INITIAL_WAREHOUSES: Warehouse[] = [
-  {
-    id: 'wh-1',
-    code: 'KHO1',
-    name: 'Kho 1',
-    location: 'Tầng 2 - Phòng 204, Tòa nhà A',
-    manager: 'Nguyễn Văn Tuấn',
-    description: 'Kho lưu trữ văn phòng phẩm, sổ sách và thiết bị dùng chung',
-    isDefault: true,
-  },
-  {
-    id: 'wh-2',
-    code: 'KHO2',
-    name: 'Kho 2',
-    location: 'Tầng 5 - Phòng 502, Tòa nhà A',
-    manager: 'Lê Thị Hà',
-    description: 'Kho vật tư sinh hoạt, bảo hộ lao động và vệ sinh công nghiệp',
-    isDefault: false,
-  },
-];
+// Utility: Auto-recover categories, units and warehouses from items if missing
+function recoverMasterDataFromItems(
+  items: Item[],
+  currentCats: Category[],
+  currentUnits: Unit[],
+  currentWhs: Warehouse[]
+): {
+  categories: Category[];
+  units: Unit[];
+  warehouses: Warehouse[];
+  newCats: Category[];
+  newUnits: Unit[];
+  newWhs: Warehouse[];
+} {
+  const categories = [...currentCats];
+  const catMap = new Map<string, Category>();
+  categories.forEach((c) => {
+    if (c.id) catMap.set(c.id, c);
+    if (c.name) catMap.set(c.name.trim().toLowerCase(), c);
+  });
+  const newCats: Category[] = [];
+  items.forEach((item) => {
+    const catName = (item.categoryName || '').trim();
+    const catId = item.categoryId;
+    if (catName && !catMap.has(catId) && !catMap.has(catName.toLowerCase())) {
+      const newCat: Category = {
+        id: catId || `cat-imp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        code: `NH${String(categories.length + 1).padStart(2, '0')}`,
+        name: catName,
+        description: `Nhóm hàng ${catName}`,
+      };
+      categories.push(newCat);
+      catMap.set(newCat.id, newCat);
+      catMap.set(catName.toLowerCase(), newCat);
+      newCats.push(newCat);
+    }
+  });
 
-const INITIAL_CATEGORIES: Category[] = [
-  { id: 'cat-1', code: 'NH01', name: 'Sổ sách & Giấy in', description: 'Giấy in A4/A3, sổ công tác, bìa trình ký, cặp hồ sơ' },
-  { id: 'cat-2', code: 'NH02', name: 'Đồ dùng sinh hoạt', description: 'Nước uống, trà, cà phê, nước rửa tay, giấy ăn, hóa chất vệ sinh' },
-  { id: 'cat-3', code: 'NH03', name: 'Đồ dùng bảo hộ', description: 'Khẩu trang, găng tay, mũ bảo hộ, nước xịt khuẩn, tủ y tế' },
-  { id: 'cat-4', code: 'NH04', name: 'Thiết bị & Linh kiện VP', description: 'Bút ký, chuột máy tính, pin, ổ cắm, mực in, bảng viết' },
-];
+  const units = [...currentUnits];
+  const unitMap = new Map<string, Unit>();
+  units.forEach((u) => {
+    if (u.id) unitMap.set(u.id, u);
+    if (u.name) unitMap.set(u.name.trim().toLowerCase(), u);
+  });
+  const newUnits: Unit[] = [];
+  items.forEach((item) => {
+    const unitName = (item.unitName || '').trim();
+    const unitId = item.unitId;
+    if (unitName && !unitMap.has(unitId) && !unitMap.has(unitName.toLowerCase())) {
+      const newUnit: Unit = {
+        id: unitId || `unit-imp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        name: unitName,
+        description: `Đơn vị tính ${unitName}`,
+      };
+      units.push(newUnit);
+      unitMap.set(newUnit.id, newUnit);
+      unitMap.set(unitName.toLowerCase(), newUnit);
+      newUnits.push(newUnit);
+    }
+  });
 
-const INITIAL_UNITS: Unit[] = [
-  { id: 'u-1', name: 'Quyển', description: 'Dùng cho sổ tay, sổ kế toán' },
-  { id: 'u-2', name: 'Cuốn', description: 'Dùng cho tạp chí, tài liệu' },
-  { id: 'u-3', name: 'Cái', description: 'Dùng cho thiết bị, công cụ' },
-  { id: 'u-4', name: 'Hộp', description: 'Dùng cho găng tay, bút, khẩu trang' },
-  { id: 'u-5', name: 'Bộ', description: 'Dùng cho bộ dụng cụ' },
-  { id: 'u-6', name: 'Chiếc', description: 'Dùng cho đồ dùng lẻ' },
-  { id: 'u-7', name: 'Đôi', description: 'Dùng cho găng tay, giày' },
-  { id: 'u-8', name: 'Gói', description: 'Dùng cho giấy ăn, trà, cà phê' },
-  { id: 'u-9', name: 'Kg', description: 'Khối lượng' },
-  { id: 'u-10', name: 'Mét', description: 'Chiều dài' },
-  { id: 'u-11', name: 'Thùng', description: 'Quy cách đóng gói lớn' },
-  { id: 'u-12', name: 'Bao', description: 'Đóng gói bao bì' },
-  { id: 'u-13', name: 'Chai', description: 'Dùng cho hóa chất, chất lỏng' },
-  { id: 'u-14', name: 'Ram', description: 'Dùng cho giấy in (500 tờ)' },
-  { id: 'u-15', name: 'Cuộn', description: 'Dùng cho băng dính, giấy in nhiệt' },
-];
+  const warehouses = [...currentWhs];
+  const whMap = new Map<string, Warehouse>();
+  warehouses.forEach((w) => {
+    if (w.id) whMap.set(w.id, w);
+    if (w.name) whMap.set(w.name.trim().toLowerCase(), w);
+  });
+  const newWhs: Warehouse[] = [];
+  items.forEach((item) => {
+    const whName = (item.warehouseName || '').trim();
+    const whId = item.warehouseId;
+    if (whName && !whMap.has(whId) && !whMap.has(whName.toLowerCase())) {
+      const newWh: Warehouse = {
+        id: whId || `wh-imp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        code: `KHO-${warehouses.length + 1}`,
+        name: whName,
+        location: 'Khu vực chung',
+        manager: 'Quản kho chính',
+        description: `Kho ${whName}`,
+        isDefault: warehouses.length === 0,
+      };
+      warehouses.push(newWh);
+      whMap.set(newWh.id, newWh);
+      whMap.set(whName.toLowerCase(), newWh);
+      newWhs.push(newWh);
+    }
+  });
 
-const INITIAL_ITEMS: Item[] = [
-  {
-    id: 'item-1',
-    code: 'HH0001',
-    name: 'Sổ tay A5 bìa da cao cấp',
-    categoryId: 'cat-1',
-    categoryName: 'Sổ sách & Giấy in',
-    unitId: 'u-1',
-    unitName: 'Quyển',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    stockQuantity: 85,
-    minStockLevel: 20,
-    maxStockLevel: 150,
-    note: 'Sổ bìa da công tác năm 2026',
-    createdAt: '2026-06-01T08:00:00Z',
-    updatedAt: '2026-07-20T10:15:00Z',
-  },
-  {
-    id: 'item-2',
-    code: 'HH0002',
-    name: 'Giấy in A4 Double A 70gsm',
-    categoryId: 'cat-1',
-    categoryName: 'Sổ sách & Giấy in',
-    unitId: 'u-14',
-    unitName: 'Ram',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    stockQuantity: 12, // LOW STOCK
-    minStockLevel: 30,
-    maxStockLevel: 200,
-    note: 'Dùng cho các phòng ban in ấn tài liệu',
-    createdAt: '2026-06-01T08:30:00Z',
-    updatedAt: '2026-07-28T14:20:00Z',
-  },
-  {
-    id: 'item-3',
-    code: 'HH0003',
-    name: 'Bút dạ bảng Thiên Long WB-03',
-    categoryId: 'cat-1',
-    categoryName: 'Sổ sách & Giấy in',
-    unitId: 'u-4',
-    unitName: 'Hộp',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    stockQuantity: 42,
-    minStockLevel: 10,
-    maxStockLevel: 80,
-    note: 'Màu xanh & đen',
-    createdAt: '2026-06-05T09:00:00Z',
-    updatedAt: '2026-07-22T11:00:00Z',
-  },
-  {
-    id: 'item-4',
-    code: 'HH0004',
-    name: 'Nước rửa tay Lifebuoy 500ml',
-    categoryId: 'cat-2',
-    categoryName: 'Đồ dùng sinh hoạt',
-    unitId: 'u-13',
-    unitName: 'Chai',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    stockQuantity: 6, // LOW STOCK
-    minStockLevel: 15,
-    maxStockLevel: 60,
-    note: 'Đặt tại khu vực vệ sinh & bếp tầng 2, 3, 5',
-    createdAt: '2026-06-10T10:00:00Z',
-    updatedAt: '2026-07-25T16:30:00Z',
-  },
-  {
-    id: 'item-5',
-    code: 'HH0005',
-    name: 'Khẩu trang y tế 4 lớp 3M',
-    categoryId: 'cat-3',
-    categoryName: 'Đồ dùng bảo hộ',
-    unitId: 'u-4',
-    unitName: 'Hộp',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    stockQuantity: 110,
-    minStockLevel: 25,
-    maxStockLevel: 200,
-    note: 'Hộp 50 chiếc',
-    createdAt: '2026-06-12T11:00:00Z',
-    updatedAt: '2026-07-15T09:10:00Z',
-  },
-  {
-    id: 'item-6',
-    code: 'HH0006',
-    name: 'Mũ bảo hộ lao động Thùy Dương',
-    categoryId: 'cat-3',
-    categoryName: 'Đồ dùng bảo hộ',
-    unitId: 'u-3',
-    unitName: 'Cái',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    stockQuantity: 0, // OUT OF STOCK
-    minStockLevel: 10,
-    maxStockLevel: 50,
-    note: 'Cần nhập bổ sung gấp cho đội kỹ thuật',
-    createdAt: '2026-06-15T13:20:00Z',
-    updatedAt: '2026-07-29T08:00:00Z',
-  },
-  {
-    id: 'item-7',
-    code: 'HH0007',
-    name: 'Găng tay cao su y tế chống nước',
-    categoryId: 'cat-3',
-    categoryName: 'Đồ dùng bảo hộ',
-    unitId: 'u-7',
-    unitName: 'Đôi',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    stockQuantity: 280, // HIGH STOCK
-    minStockLevel: 50,
-    maxStockLevel: 200,
-    note: 'Găng tay chống hóa chất lau dọn',
-    createdAt: '2026-06-18T14:00:00Z',
-    updatedAt: '2026-07-10T15:45:00Z',
-  },
-  {
-    id: 'item-8',
-    code: 'HH0008',
-    name: 'Bút ký kim loại cao cấp Parker',
-    categoryId: 'cat-4',
-    categoryName: 'Thiết bị & Linh kiện VP',
-    unitId: 'u-6',
-    unitName: 'Chiếc',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    stockQuantity: 4, // LOW STOCK
-    minStockLevel: 10,
-    maxStockLevel: 30,
-    note: 'Dùng cho Ban Giám đốc & Tiếp khách VIP',
-    createdAt: '2026-06-20T15:00:00Z',
-    updatedAt: '2026-07-27T10:00:00Z',
-  },
-  {
-    id: 'item-9',
-    code: 'HH0009',
-    name: 'Pin AA Panasonic Hi-Top 24 viên',
-    categoryId: 'cat-4',
-    categoryName: 'Thiết bị & Linh kiện VP',
-    unitId: 'u-4',
-    unitName: 'Hộp',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    stockQuantity: 22,
-    minStockLevel: 5,
-    maxStockLevel: 40,
-    note: 'Dùng cho chuột không dây, đồng hồ, điều hòa',
-    createdAt: '2026-06-22T09:30:00Z',
-    updatedAt: '2026-07-18T16:00:00Z',
-  },
-  {
-    id: 'item-10',
-    code: 'HH0010',
-    name: 'Khăn giấy ăn Napkin Pulppy',
-    categoryId: 'cat-2',
-    categoryName: 'Đồ dùng sinh hoạt',
-    unitId: 'u-8',
-    unitName: 'Gói',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    stockQuantity: 95,
-    minStockLevel: 20,
-    maxStockLevel: 150,
-    note: 'Giấy lau phòng họp & căn tin',
-    createdAt: '2026-06-25T10:10:00Z',
-    updatedAt: '2026-07-26T11:20:00Z',
-  },
-  {
-    id: 'item-11',
-    code: 'HH0011',
-    name: 'Băng dính trong 5cm x 100m',
-    categoryId: 'cat-1',
-    categoryName: 'Sổ sách & Giấy in',
-    unitId: 'u-15',
-    unitName: 'Cuộn',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    stockQuantity: 38,
-    minStockLevel: 10,
-    maxStockLevel: 60,
-    note: 'Đóng gói bưu phẩm & tài liệu gửi đi',
-    createdAt: '2026-06-28T11:40:00Z',
-    updatedAt: '2026-07-21T09:30:00Z',
-  },
-  {
-    id: 'item-12',
-    code: 'HH0012',
-    name: 'Bình xịt khử khuẩn không khí Cloramin B',
-    categoryId: 'cat-2',
-    categoryName: 'Đồ dùng sinh hoạt',
-    unitId: 'u-13',
-    unitName: 'Chai',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    stockQuantity: 3, // LOW STOCK
-    minStockLevel: 8,
-    maxStockLevel: 30,
-    note: 'Khử khuẩn định kỳ văn phòng',
-    createdAt: '2026-07-01T08:00:00Z',
-    updatedAt: '2026-07-28T17:00:00Z',
-  },
-];
-
-const INITIAL_VOUCHERS: StockVoucher[] = [
-  {
-    id: 'v-in-1',
-    code: 'PN202607001',
-    type: 'IN',
-    date: '2026-07-05',
-    person: 'Nguyễn Văn Tuấn',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    note: 'Nhập văn phòng phẩm đợt 1 tháng 7',
-    totalQuantity: 100,
-    items: [
-      { itemId: 'item-1', itemCode: 'HH0001', itemName: 'Sổ tay A5 bìa da cao cấp', unitName: 'Quyển', quantity: 50 },
-      { itemId: 'item-2', itemCode: 'HH0002', itemName: 'Giấy in A4 Double A 70gsm', unitName: 'Ram', quantity: 50 },
-    ],
-    createdAt: '2026-07-05T09:00:00Z',
-  },
-  {
-    id: 'v-in-2',
-    code: 'PN202607002',
-    type: 'IN',
-    date: '2026-07-12',
-    person: 'Lê Thị Hà',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    note: 'Nhập vật tư bảo hộ đợt tháng 7',
-    totalQuantity: 200,
-    items: [
-      { itemId: 'item-5', itemCode: 'HH0005', itemName: 'Khẩu trang y tế 4 lớp 3M', unitName: 'Hộp', quantity: 100 },
-      { itemId: 'item-7', itemCode: 'HH0007', itemName: 'Găng tay cao su y tế chống nước', unitName: 'Đôi', quantity: 100 },
-    ],
-    createdAt: '2026-07-12T10:30:00Z',
-  },
-  {
-    id: 'v-out-1',
-    code: 'PX202607001',
-    type: 'OUT',
-    date: '2026-07-20',
-    person: 'Trần Thị Mai',
-    department: 'Phòng Hành chính Nhân sự',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    note: 'Cấp phát văn phòng phẩm tháng 7',
-    totalQuantity: 48,
-    items: [
-      { itemId: 'item-1', itemCode: 'HH0001', itemName: 'Sổ tay A5 bìa da cao cấp', unitName: 'Quyển', quantity: 10 },
-      { itemId: 'item-2', itemCode: 'HH0002', itemName: 'Giấy in A4 Double A 70gsm', unitName: 'Ram', quantity: 38 },
-    ],
-    createdAt: '2026-07-20T14:00:00Z',
-  },
-  {
-    id: 'v-out-2',
-    code: 'PX202607002',
-    type: 'OUT',
-    date: '2026-07-25',
-    person: 'Phạm Minh Đức',
-    department: 'Phòng Kỹ thuật Công nghệ',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    note: 'Xuất dùng khử khuẩn và bảo hộ định kỳ',
-    totalQuantity: 15,
-    items: [
-      { itemId: 'item-4', itemCode: 'HH0004', itemName: 'Nước rửa tay Lifebuoy 500ml', unitName: 'Chai', quantity: 10 },
-      { itemId: 'item-12', itemCode: 'HH0012', itemName: 'Bình xịt khử khuẩn không khí Cloramin B', unitName: 'Chai', quantity: 5 },
-    ],
-    createdAt: '2026-07-25T16:00:00Z',
-  },
-];
-
-const INITIAL_LOGS: InventoryLog[] = [
-  {
-    id: 'log-1',
-    voucherId: 'v-in-1',
-    voucherCode: 'PN202607001',
-    type: 'IN',
-    date: '2026-07-05',
-    itemId: 'item-1',
-    itemCode: 'HH0001',
-    itemName: 'Sổ tay A5 bìa da cao cấp',
-    categoryName: 'Sổ sách & Giấy in',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    quantity: 50,
-    previousStock: 45,
-    newStock: 95,
-    person: 'Nguyễn Văn Tuấn',
-    note: 'Nhập đợt 1 tháng 7',
-  },
-  {
-    id: 'log-2',
-    voucherId: 'v-in-1',
-    voucherCode: 'PN202607001',
-    type: 'IN',
-    date: '2026-07-05',
-    itemId: 'item-2',
-    itemCode: 'HH0002',
-    itemName: 'Giấy in A4 Double A 70gsm',
-    categoryName: 'Sổ sách & Giấy in',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    quantity: 50,
-    previousStock: 0,
-    newStock: 50,
-    person: 'Nguyễn Văn Tuấn',
-    note: 'Nhập đợt 1 tháng 7',
-  },
-  {
-    id: 'log-3',
-    voucherId: 'v-out-1',
-    voucherCode: 'PX202607001',
-    type: 'OUT',
-    date: '2026-07-20',
-    itemId: 'item-1',
-    itemCode: 'HH0001',
-    itemName: 'Sổ tay A5 bìa da cao cấp',
-    categoryName: 'Sổ sách & Giấy in',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    quantity: 10,
-    previousStock: 95,
-    newStock: 85,
-    person: 'Trần Thị Mai',
-    department: 'Phòng Hành chính Nhân sự',
-    note: 'Cấp phát tháng 7',
-  },
-  {
-    id: 'log-4',
-    voucherId: 'v-out-1',
-    voucherCode: 'PX202607001',
-    type: 'OUT',
-    date: '2026-07-20',
-    itemId: 'item-2',
-    itemCode: 'HH0002',
-    itemName: 'Giấy in A4 Double A 70gsm',
-    categoryName: 'Sổ sách & Giấy in',
-    warehouseId: 'wh-1',
-    warehouseName: 'Kho 1',
-    quantity: 38,
-    previousStock: 50,
-    newStock: 12,
-    person: 'Trần Thị Mai',
-    department: 'Phòng Hành chính Nhân sự',
-    note: 'Cấp phát in ấn ấn phẩm',
-  },
-  {
-    id: 'log-5',
-    voucherId: 'v-out-2',
-    voucherCode: 'PX202607002',
-    type: 'OUT',
-    date: '2026-07-25',
-    itemId: 'item-4',
-    itemCode: 'HH0004',
-    itemName: 'Nước rửa tay Lifebuoy 500ml',
-    categoryName: 'Đồ dùng sinh hoạt',
-    warehouseId: 'wh-2',
-    warehouseName: 'Kho 2',
-    quantity: 10,
-    previousStock: 16,
-    newStock: 6,
-    person: 'Phạm Minh Đức',
-    department: 'Phòng Kỹ thuật Công nghệ',
-    note: 'Dùng xà phòng lau dọn phòng máy',
-  },
-];
+  return { categories, units, warehouses, newCats, newUnits, newWhs };
+}
 
 export const useInventoryStore = create<InventoryState>()(
   persist(
@@ -618,13 +245,70 @@ export const useInventoryStore = create<InventoryState>()(
         const config = get().sqlServerConfig;
         const res = await fetchAllFromSQLServer(config);
         if (res.success) {
+          const rawItems = res.items || [];
+          const { categories, units, warehouses, newCats, newUnits, newWhs } = recoverMasterDataFromItems(
+            rawItems,
+            res.categories || [],
+            res.units || [],
+            res.warehouses || []
+          );
+
+          if (newCats.length > 0) {
+            newCats.forEach((c) => {
+              saveCategoryToSQLServer(config, c);
+            });
+          }
+          if (newUnits.length > 0) {
+            newUnits.forEach((u) => {
+              saveUnitToSQLServer(config, u);
+            });
+          }
+          if (newWhs.length > 0) {
+            newWhs.forEach((w) => {
+              saveWarehouseToSQLServer(config, w);
+            });
+          }
+
+          // Merge SQL Server vouchers with current state:
+          // If SQL Server returns a voucher with empty items[] (e.g. stock_voucher_items table
+          // was never populated), fall back to items already stored locally so the detail
+          // view never goes blank.
+          const currentState = get();
+          const serverVouchers = res.vouchers || [];
+          const currentVouchers = currentState.vouchers;
+
+          const mergedVouchers = serverVouchers.map((sv) => {
+            if (sv.items.length === 0 && currentVouchers.length > 0) {
+              const existing = currentVouchers.find(
+                (v) => v.id === sv.id || v.code === sv.code
+              );
+              if (existing && existing.items.length > 0) {
+                return {
+                  ...sv,
+                  items: existing.items,
+                  totalQuantity: sv.totalQuantity || existing.totalQuantity,
+                };
+              }
+            }
+            return sv;
+          });
+
+          // Merge logs: keep local logs for vouchers that have no matching entry on the server
+          const serverLogs = res.logs || [];
+          const currentLogs = currentState.logs;
+          const serverLogVoucherIds = new Set(serverLogs.map((l) => l.voucherId));
+          const extraLocalLogs = currentLogs.filter(
+            (l) => !serverLogVoucherIds.has(l.voucherId)
+          );
+          const mergedLogs = [...serverLogs, ...extraLocalLogs];
+
           set({
-            items: res.items || [],
-            categories: res.categories || [],
-            warehouses: res.warehouses || [],
-            units: res.units || [],
-            vouchers: res.vouchers || [],
-            logs: res.logs || [],
+            items: rawItems,
+            categories,
+            warehouses,
+            units,
+            vouchers: mergedVouchers,
+            logs: mergedLogs,
             isSQLServerConnected: true,
             isLoadingFromSQLServer: false,
           });
@@ -661,16 +345,6 @@ export const useInventoryStore = create<InventoryState>()(
         return result;
       },
 
-      // MySQL State & Actions
-      mysqlConfig: getStoredMySQLConfig(),
-      setMysqlConfig: (config) => {
-        saveStoredMySQLConfig(config);
-        set({ mysqlConfig: config });
-      },
-      isLoadingFromMySQL: false,
-      isMySQLConnected: false,
-      mysqlError: null,
-
       adminPassword: 'Antu123!@',
       isSettingsUnlocked: false,
 
@@ -697,82 +371,6 @@ export const useInventoryStore = create<InventoryState>()(
 
       lockSettings: () => set({ isSettingsUnlocked: false }),
 
-      fetchFromMySQL: async () => {
-        set({ isLoadingFromMySQL: true, mysqlError: null });
-        const config = get().mysqlConfig;
-        const res = await fetchAllFromMySQL(config);
-        if (res.success) {
-          set({
-            items: res.items || [],
-            categories: res.categories || [],
-            warehouses: res.warehouses || [],
-            units: res.units || [],
-            vouchers: res.vouchers || [],
-            logs: res.logs || [],
-            isMySQLConnected: true,
-            isLoadingFromMySQL: false,
-          });
-          if (res.users && Array.isArray(res.users)) {
-            useAuthStore.setState({ usersList: res.users });
-            saveStoredLocalUsers(res.users);
-          }
-        } else {
-          set({
-            mysqlError: res.error || 'Không thể tải dữ liệu từ MySQL',
-            isMySQLConnected: false,
-            isLoadingFromMySQL: false,
-          });
-        }
-      },
-
-      testMySQLConfig: async (cfg) => {
-        const configToTest = cfg || get().mysqlConfig;
-        const result = await testMySQLConnection(configToTest);
-        if (result.success) {
-          set({ isMySQLConnected: true, mysqlError: null });
-        } else {
-          set({ isMySQLConnected: false, mysqlError: result.message });
-        }
-        return result;
-      },
-
-      initMySQLDb: async (cfg) => {
-        const configToInit = cfg || get().mysqlConfig;
-        const result = await initMySQLTables(configToInit);
-        if (result.success) {
-          set({ isMySQLConnected: true, mysqlError: null });
-        }
-        return result;
-      },
-
-      // Supabase State & Action
-      isLoadingFromSupabase: false,
-      isSupabaseConnected: false,
-      supabaseError: null,
-
-      fetchFromSupabase: async () => {
-        set({ isLoadingFromSupabase: true, supabaseError: null });
-        const res = await fetchAllFromSupabase();
-        if (res.success) {
-          set({
-            items: res.items || [],
-            categories: res.categories && res.categories.length > 0 ? res.categories : get().categories,
-            warehouses: res.warehouses && res.warehouses.length > 0 ? res.warehouses : get().warehouses,
-            units: res.units && res.units.length > 0 ? res.units : get().units,
-            vouchers: res.vouchers || [],
-            logs: res.logs || [],
-            isSupabaseConnected: true,
-            isLoadingFromSupabase: false,
-          });
-        } else {
-          set({
-            supabaseError: res.error || 'Failed to fetch from Supabase',
-            isSupabaseConnected: false,
-            isLoadingFromSupabase: false,
-          });
-        }
-      },
-
       warehouses: [],
       categories: [],
       units: [],
@@ -785,8 +383,6 @@ export const useInventoryStore = create<InventoryState>()(
         const id = `wh-${Date.now()}`;
         const newWh: Warehouse = { ...whData, id };
         set((state) => ({ warehouses: [...state.warehouses, newWh] }));
-        saveWarehouseToSupabase(newWh);
-        saveWarehouseToMySQL(get().mysqlConfig, newWh);
         saveWarehouseToSQLServer(get().sqlServerConfig, newWh);
       },
 
@@ -798,8 +394,6 @@ export const useInventoryStore = create<InventoryState>()(
           );
           const target = updatedWhs.find((w) => w.id === id);
           if (target) {
-            saveWarehouseToSupabase(target);
-            saveWarehouseToMySQL(get().mysqlConfig, target);
             saveWarehouseToSQLServer(get().sqlServerConfig, target);
           }
           return { warehouses: updatedWhs, items: updatedItems };
@@ -811,8 +405,6 @@ export const useInventoryStore = create<InventoryState>()(
         const hasItems = state.items.some((i) => i.warehouseId === id);
         if (hasItems) return false;
         set({ warehouses: state.warehouses.filter((w) => w.id !== id) });
-        deleteWarehouseFromSupabase(id);
-        deleteWarehouseFromMySQL(get().mysqlConfig, id);
         deleteWarehouseFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
@@ -822,8 +414,6 @@ export const useInventoryStore = create<InventoryState>()(
         const id = `cat-${Date.now()}`;
         const newCat: Category = { ...catData, id };
         set((state) => ({ categories: [...state.categories, newCat] }));
-        saveCategoryToSupabase(newCat);
-        saveCategoryToMySQL(get().mysqlConfig, newCat);
         saveCategoryToSQLServer(get().sqlServerConfig, newCat);
       },
 
@@ -835,8 +425,6 @@ export const useInventoryStore = create<InventoryState>()(
           );
           const target = updatedCats.find((c) => c.id === id);
           if (target) {
-            saveCategoryToSupabase(target);
-            saveCategoryToMySQL(get().mysqlConfig, target);
             saveCategoryToSQLServer(get().sqlServerConfig, target);
           }
           return { categories: updatedCats, items: updatedItems };
@@ -848,8 +436,6 @@ export const useInventoryStore = create<InventoryState>()(
         const hasItems = state.items.some((i) => i.categoryId === id);
         if (hasItems) return false;
         set({ categories: state.categories.filter((c) => c.id !== id) });
-        deleteCategoryFromSupabase(id);
-        deleteCategoryFromMySQL(get().mysqlConfig, id);
         deleteCategoryFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
@@ -859,8 +445,6 @@ export const useInventoryStore = create<InventoryState>()(
         const id = `u-${Date.now()}`;
         const newUnit: Unit = { ...unitData, id };
         set((state) => ({ units: [...state.units, newUnit] }));
-        saveUnitToSupabase(newUnit);
-        saveUnitToMySQL(get().mysqlConfig, newUnit);
         saveUnitToSQLServer(get().sqlServerConfig, newUnit);
       },
 
@@ -872,8 +456,6 @@ export const useInventoryStore = create<InventoryState>()(
           );
           const target = updatedUnits.find((u) => u.id === id);
           if (target) {
-            saveUnitToSupabase(target);
-            saveUnitToMySQL(get().mysqlConfig, target);
             saveUnitToSQLServer(get().sqlServerConfig, target);
           }
           return { units: updatedUnits, items: updatedItems };
@@ -885,8 +467,6 @@ export const useInventoryStore = create<InventoryState>()(
         const hasItems = state.items.some((i) => i.unitId === id);
         if (hasItems) return false;
         set({ units: state.units.filter((u) => u.id !== id) });
-        deleteUnitFromSupabase(id);
-        deleteUnitFromMySQL(get().mysqlConfig, id);
         deleteUnitFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
@@ -916,8 +496,6 @@ export const useInventoryStore = create<InventoryState>()(
         };
 
         set({ items: [newItem, ...state.items] });
-        saveItemToSupabase(newItem);
-        saveItemToMySQL(get().mysqlConfig, newItem);
         saveItemToSQLServer(get().sqlServerConfig, newItem);
         return newItem;
       },
@@ -950,8 +528,6 @@ export const useInventoryStore = create<InventoryState>()(
         }));
 
         if (updatedItem) {
-          saveItemToSupabase(updatedItem);
-          saveItemToMySQL(get().mysqlConfig, updatedItem);
           saveItemToSQLServer(get().sqlServerConfig, updatedItem);
         }
       },
@@ -960,8 +536,6 @@ export const useInventoryStore = create<InventoryState>()(
         set((state) => ({
           items: state.items.filter((item) => item.id !== id),
         }));
-        deleteItemFromSupabase(id);
-        deleteItemFromMySQL(get().mysqlConfig, id);
         deleteItemFromSQLServer(get().sqlServerConfig, id);
         return true;
       },
@@ -1004,11 +578,10 @@ export const useInventoryStore = create<InventoryState>()(
             };
             currentCategories.push(cat);
             newlyCreatedCats.push(cat);
-            saveCategoryToSupabase(cat);
-            saveCategoryToMySQL(state.mysqlConfig, cat);
+            saveCategoryToSQLServer(get().sqlServerConfig, cat);
           }
-          let catId = cat ? cat.id : currentCategories[0]?.id || 'cat-1';
-          let catName = cat ? cat.name : currentCategories[0]?.name || 'Văn phòng phẩm';
+          let catId = cat ? cat.id : currentCategories[0]?.id || '';
+          let catName = cat ? cat.name : currentCategories[0]?.name || '';
 
           // 2. Match or Create Unit
           const rowUnitName = (row.unitName || '').trim();
@@ -1023,11 +596,10 @@ export const useInventoryStore = create<InventoryState>()(
             };
             currentUnits.push(unit);
             newlyCreatedUnits.push(unit);
-            saveUnitToSupabase(unit);
-            saveUnitToMySQL(state.mysqlConfig, unit);
+            saveUnitToSQLServer(get().sqlServerConfig, unit);
           }
-          let unitId = unit ? unit.id : currentUnits[0]?.id || 'u-3';
-          let unitName = unit ? unit.name : currentUnits[0]?.name || 'Cái';
+          let unitId = unit ? unit.id : currentUnits[0]?.id || '';
+          let unitName = unit ? unit.name : currentUnits[0]?.name || '';
 
           // 3. Match or Create Warehouse
           const rowWhName = (row.warehouseName || '').trim();
@@ -1048,11 +620,10 @@ export const useInventoryStore = create<InventoryState>()(
             };
             currentWarehouses.push(wh);
             newlyCreatedWarehouses.push(wh);
-            saveWarehouseToSupabase(wh);
-            saveWarehouseToMySQL(state.mysqlConfig, wh);
+            saveWarehouseToSQLServer(get().sqlServerConfig, wh);
           }
-          let whId = wh ? wh.id : currentWarehouses[0]?.id || 'wh-1';
-          let whName = wh ? wh.name : currentWarehouses[0]?.name || 'Kho 1';
+          let whId = wh ? wh.id : currentWarehouses[0]?.id || '';
+          let whName = wh ? wh.name : currentWarehouses[0]?.name || '';
 
           // Code generation
           const code = generateItemCode([...existingCodes, ...newItems.map((n) => n.code)]);
@@ -1082,9 +653,7 @@ export const useInventoryStore = create<InventoryState>()(
 
           newItems.push(newItem);
 
-          // Save item to DB (Supabase, MySQL & SQL Server)
-          saveItemToSupabase(newItem);
-          saveItemToMySQL(state.mysqlConfig, newItem);
+          // Save item to SQL Server
           saveItemToSQLServer(get().sqlServerConfig, newItem);
 
           successCount++;
@@ -1105,6 +674,35 @@ export const useInventoryStore = create<InventoryState>()(
         }
 
         return { successCount, errorCount };
+      },
+
+      syncMissingCategoriesFromItems: () => {
+        const state = get();
+        const { categories, units, warehouses, newCats, newUnits, newWhs } = recoverMasterDataFromItems(
+          state.items,
+          state.categories,
+          state.units,
+          state.warehouses
+        );
+
+        if (newCats.length > 0 || newUnits.length > 0 || newWhs.length > 0) {
+          set({ categories, units, warehouses });
+          newCats.forEach((c) => {
+            saveCategoryToSQLServer(state.sqlServerConfig, c);
+          });
+          newUnits.forEach((u) => {
+            saveUnitToSQLServer(state.sqlServerConfig, u);
+          });
+          newWhs.forEach((w) => {
+            saveWarehouseToSQLServer(state.sqlServerConfig, w);
+          });
+        }
+
+        return {
+          addedCats: newCats.length,
+          addedUnits: newUnits.length,
+          addedWarehouses: newWhs.length,
+        };
       },
 
       // Create Inbound Stock Voucher
@@ -1170,6 +768,7 @@ export const useInventoryStore = create<InventoryState>()(
             previousStock: prevStock,
             newStock: newStock,
             person: data.person,
+            department: data.department,
             note: data.note || 'Nhập kho',
           });
         }
@@ -1184,6 +783,7 @@ export const useInventoryStore = create<InventoryState>()(
           type: 'IN',
           date: data.date,
           person: data.person,
+          department: data.department,
           warehouseId: warehouse.id,
           warehouseName: warehouse.name,
           note: data.note,
@@ -1200,8 +800,6 @@ export const useInventoryStore = create<InventoryState>()(
           items: updatedItemsList,
         });
 
-        saveVoucherToSupabase(newVoucher, newLogs, updatedItemsList);
-        saveVoucherToMySQL(get().mysqlConfig, newVoucher, newLogs, updatedItemsList);
         saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu nhập kho thành công: ${voucherCode}`, voucher: newVoucher };
@@ -1291,6 +889,7 @@ export const useInventoryStore = create<InventoryState>()(
             previousStock: prevStock,
             newStock: newStock,
             person: data.person,
+            department: data.department,
             note: data.note || 'Cập nhật phiếu nhập kho',
           });
         }
@@ -1303,6 +902,7 @@ export const useInventoryStore = create<InventoryState>()(
           ...existingVoucher,
           date: data.date,
           person: data.person,
+          department: data.department,
           warehouseId: warehouse.id,
           warehouseName: warehouse.name,
           note: data.note,
@@ -1320,8 +920,6 @@ export const useInventoryStore = create<InventoryState>()(
           items: updatedItemsList,
         });
 
-        saveVoucherToSupabase(updatedVoucher, newLogs, updatedItemsList);
-        saveVoucherToMySQL(get().mysqlConfig, updatedVoucher, newLogs, updatedItemsList);
         saveVoucherToSQLServer(get().sqlServerConfig, updatedVoucher, newLogs, updatedItemsList);
 
         return {
@@ -1374,7 +972,6 @@ export const useInventoryStore = create<InventoryState>()(
           items: updatedItemsList,
         });
 
-        deleteVoucherFromMySQL(get().mysqlConfig, id, updatedItemsList);
         deleteVoucherFromSQLServer(get().sqlServerConfig, id, updatedItemsList);
 
         return {
@@ -1486,8 +1083,6 @@ export const useInventoryStore = create<InventoryState>()(
           items: updatedItemsList,
         });
 
-        saveVoucherToSupabase(newVoucher, newLogs, updatedItemsList);
-        saveVoucherToMySQL(get().mysqlConfig, newVoucher, newLogs, updatedItemsList);
         saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu xuất kho thành công: ${voucherCode}`, voucher: newVoucher };
@@ -1499,18 +1094,7 @@ export const useInventoryStore = create<InventoryState>()(
         }));
       },
 
-      resetToMockData: () => {
-        set({
-          warehouses: INITIAL_WAREHOUSES,
-          categories: INITIAL_CATEGORIES,
-          units: INITIAL_UNITS,
-          items: INITIAL_ITEMS,
-          vouchers: INITIAL_VOUCHERS,
-          logs: INITIAL_LOGS,
-        });
-      },
-
-      clearAllDemoData: () => {
+      clearLocalData: () => {
         set({
           warehouses: [],
           categories: [],

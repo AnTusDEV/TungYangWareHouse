@@ -104,7 +104,7 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
     reports: { title: 'Báo Cáo Thống Kê', subtitle: 'Thống kê tổng hợp Nhập - Xuất - Tồn & phân tích mặt hàng' },
     categories: { title: 'Quản Lý Danh Mục', subtitle: 'Phân loại nhóm hàng & danh mục đơn vị tính linh hoạt' },
     accounts: { title: 'Quản Lý Tài Khoản', subtitle: 'Quản lý người dùng, phân quyền & bảo mật hệ thống' },
-    settings: { title: 'Cài Đặt & Thiết Lập', subtitle: 'Cấu hình hệ thống, dữ liệu mẫu & giao diện' },
+    settings: { title: 'Cài Đặt & Thiết Lập', subtitle: 'Cấu hình hệ thống, kết nối CSDL & giao diện' },
   };
 
   const currentTabInfo = tabTitles[activeTab] || { title: 'Quản Lý Kho', subtitle: '' };

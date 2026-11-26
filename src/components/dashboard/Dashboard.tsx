@@ -57,7 +57,11 @@ export function Dashboard() {
 
   // 1. Category Breakdown Data for Pie Chart
   const categoryData = categories.map((cat) => {
-    const catItems = items.filter((i) => i.categoryId === cat.id);
+    const catItems = items.filter(
+      (i) =>
+        i.categoryId === cat.id ||
+        (cat.name && i.categoryName?.trim().toLowerCase() === cat.name.trim().toLowerCase())
+    );
     const totalQty = catItems.reduce((sum, i) => sum + i.stockQuantity, 0);
     return {
       name: cat.name,
@@ -66,14 +70,27 @@ export function Dashboard() {
     };
   }).filter((d) => d.value > 0);
 
-  // 2. Monthly In/Out Bar Chart Data
-  const monthlyData = [
-    { name: 'Thg 3', Nhập: 120, Xuất: 80 },
-    { name: 'Thg 4', Nhập: 180, Xuất: 140 },
-    { name: 'Thg 5', Nhập: 210, Xuất: 190 },
-    { name: 'Thg 6', Nhập: 250, Xuất: 220 },
-    { name: 'Thg 7', Nhập: 300, Xuất: 163 },
-  ];
+  // 2. Monthly In/Out Bar Chart Data (aggregated from actual vouchers)
+  const monthlyMap = new Map<string, { Nhập: number; Xuất: number }>();
+  vouchers.forEach((v) => {
+    if (!v.date) return;
+    const monthKey = v.date.slice(0, 7); // YYYY-MM
+    const current = monthlyMap.get(monthKey) || { Nhập: 0, Xuất: 0 };
+    if (v.type === 'IN') current.Nhập += v.totalQuantity || 0;
+    else if (v.type === 'OUT') current.Xuất += v.totalQuantity || 0;
+    monthlyMap.set(monthKey, current);
+  });
+
+  const monthlyData = Array.from(monthlyMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-6)
+    .map(([key, vals]) => {
+      const [year, month] = key.split('-');
+      return {
+        name: month && year ? `Thg ${Number(month)}/${year}` : key,
+        ...vals,
+      };
+    });
 
   // 3. Top Outbound Items Data
   const topOutboundData = items
@@ -86,9 +103,10 @@ export function Dashboard() {
         .reduce((sum, line) => sum + line.quantity, 0);
       return {
         name: item.name.length > 20 ? item.name.substring(0, 18) + '...' : item.name,
-        xuất: totalOut || Math.floor(Math.random() * 30 + 10),
+        xuất: totalOut,
       };
     })
+    .filter((d) => d.xuất > 0)
     .sort((a, b) => b.xuất - a.xuất)
     .slice(0, 5);
 
@@ -149,9 +167,8 @@ export function Dashboard() {
           <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">
             {formatNumber(totalItemsCount)}
           </div>
-          <div className="mt-2 flex items-center gap-1 text-[11px] font-medium text-emerald-500">
-            <ArrowUp className="h-3 w-3" />
-            <span>+4.2% so với kỳ trước</span>
+          <div className="mt-2 flex items-center gap-1 text-[11px] font-medium text-slate-400">
+            <span>Tại {formatNumber(warehouses.length)} phòng kho</span>
           </div>
         </div>
 
@@ -164,9 +181,8 @@ export function Dashboard() {
           <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">
             {formatNumber(inVouchersCount)}
           </div>
-          <div className="mt-2 flex items-center gap-1 text-[11px] font-medium text-emerald-500">
-            <ArrowUp className="h-3 w-3" />
-            <span>+12.8% đợt bổ sung</span>
+          <div className="mt-2 flex items-center gap-1 text-[11px] font-medium text-slate-400">
+            <span>Tổng số phiếu nhập</span>
           </div>
         </div>
 
@@ -180,7 +196,7 @@ export function Dashboard() {
             {formatNumber(outVouchersCount)}
           </div>
           <div className="mt-2 flex items-center gap-1 text-[11px] font-medium text-slate-400">
-            <span>Cấp phát đầy đủ</span>
+            <span>Tổng số phiếu xuất</span>
           </div>
         </div>
 
@@ -243,37 +259,43 @@ export function Dashboard() {
           </div>
 
           <div className="h-64 w-full relative my-auto">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={categoryData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={55}
-                  outerRadius={85}
-                  paddingAngle={4}
-                  dataKey="value"
-                >
-                  {categoryData.map((_, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={PIE_COLORS[index % PIE_COLORS.length]}
-                      stroke="none"
-                    />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    borderColor: '#334155',
-                    borderRadius: '12px',
-                    color: '#fff',
-                    fontSize: '12px',
-                  }}
-                  formatter={(val: any) => [`${formatNumber(Number(val))} đơn vị`, 'Số lượng']}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            {categoryData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={categoryData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={85}
+                    paddingAngle={4}
+                    dataKey="value"
+                  >
+                    {categoryData.map((_, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={PIE_COLORS[index % PIE_COLORS.length]}
+                        stroke="none"
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      borderColor: '#334155',
+                      borderRadius: '12px',
+                      color: '#fff',
+                      fontSize: '12px',
+                    }}
+                    formatter={(val: any) => [`${formatNumber(Number(val))} đơn vị`, 'Số lượng']}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                Chưa có dữ liệu tồn kho theo nhóm hàng
+              </div>
+            )}
           </div>
 
           {/* Custom Legend */}
@@ -325,24 +347,30 @@ export function Dashboard() {
           </div>
 
           <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={monthlyData} barGap={6}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} />
-                <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tickLine={false} />
-                <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    borderColor: '#334155',
-                    borderRadius: '12px',
-                    color: '#fff',
-                    fontSize: '12px',
-                  }}
-                />
-                <Bar dataKey="Nhập" fill="#06b6d4" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="Xuất" fill="#f59e0b" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {monthlyData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlyData} barGap={6}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} />
+                  <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tickLine={false} />
+                  <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      borderColor: '#334155',
+                      borderRadius: '12px',
+                      color: '#fff',
+                      fontSize: '12px',
+                    }}
+                  />
+                  <Bar dataKey="Nhập" fill="#06b6d4" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="Xuất" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                Chưa có dữ liệu phiếu nhập / xuất theo tháng
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -361,23 +389,29 @@ export function Dashboard() {
           </div>
 
           <div className="h-60 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topOutboundData} layout="vertical" margin={{ left: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.15} />
-                <XAxis type="number" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={11} tickLine={false} width={100} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    borderColor: '#334155',
-                    borderRadius: '12px',
-                    color: '#fff',
-                    fontSize: '12px',
-                  }}
-                />
-                <Bar dataKey="xuất" fill="#3b82f6" radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {topOutboundData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topOutboundData} layout="vertical" margin={{ left: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.15} />
+                  <XAxis type="number" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                  <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={11} tickLine={false} width={100} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      borderColor: '#334155',
+                      borderRadius: '12px',
+                      color: '#fff',
+                      fontSize: '12px',
+                    }}
+                  />
+                  <Bar dataKey="xuất" fill="#3b82f6" radius={[0, 6, 6, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                Chưa có dữ liệu xuất kho
+              </div>
+            )}
           </div>
         </div>
 

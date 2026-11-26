@@ -28,8 +28,12 @@ export function WarehouseItemsModal({ isOpen, onClose, warehouse }: WarehouseIte
 
   if (!warehouse) return null;
 
-  // Filter items for this warehouse
-  const warehouseItems = items.filter((item) => item.warehouseId === warehouse.id);
+  // Filter items for this warehouse (matching by ID or Name)
+  const warehouseItems = items.filter(
+    (item) =>
+      item.warehouseId === warehouse.id ||
+      (warehouse.name && item.warehouseName?.trim().toLowerCase() === warehouse.name.trim().toLowerCase())
+  );
 
   // Search filter
   const filteredItems = warehouseItems.filter(

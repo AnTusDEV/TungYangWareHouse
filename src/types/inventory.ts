@@ -56,7 +56,7 @@ export interface StockVoucher {
   type: 'IN' | 'OUT';
   date: string;
   person: string; // Người nhập hoặc người nhận
-  department?: string; // Bộ phận (nếu là phiếu xuất)
+  department?: string; // Bộ phận nhận / phòng ban
   warehouseId: string;
   warehouseName: string;
   note?: string;

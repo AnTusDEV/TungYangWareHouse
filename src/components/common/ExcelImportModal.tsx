@@ -34,9 +34,9 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
 
         return {
           name: r['Tên Hàng Hóa'] || r['Tên hàng'] || r['Ten Hang'] || r['Name'] || '',
-          categoryName: r['Nhóm Hàng'] || r['Nhóm hàng'] || r['Category'] || 'Văn phòng phẩm',
-          unitName: r['Đơn Vị Tính'] || r['Đơn vị'] || r['Unit'] || 'Cái',
-          warehouseName: r['Kho'] || r['Warehouse'] || 'Kho 1',
+          categoryName: r['Nhóm Hàng'] || r['Nhóm hàng'] || r['Category'] || '',
+          unitName: r['Đơn Vị Tính'] || r['Đơn vị'] || r['Unit'] || '',
+          warehouseName: r['Kho'] || r['Warehouse'] || '',
           stockQuantity,
           note: r['Ghi Chú'] || r['Ghi chú'] || '',
         };

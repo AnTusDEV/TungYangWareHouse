@@ -61,6 +61,7 @@ export function StockInManager() {
     items,
     warehouses,
     vouchers,
+    logs,
     createStockInVoucher,
     updateStockInVoucher,
     deleteStockInVoucher,
@@ -77,7 +78,8 @@ export function StockInManager() {
   // Form State
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [person, setPerson] = useState<string>(currentUserName);
-  const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || 'wh-1');
+  const [department, setDepartment] = useState<string>('');
+  const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || '');
   const [note, setNote] = useState<string>('');
 
   // Line Items State
@@ -90,7 +92,8 @@ export function StockInManager() {
     setAlertInfo(null);
     setDate(new Date().toISOString().split('T')[0]);
     setPerson(currentUserName);
-    setWarehouseId(warehouses[0]?.id || 'wh-1');
+    setDepartment('');
+    setWarehouseId(warehouses[0]?.id || '');
     setNote('');
     if (items.length > 0) {
       setLineItems([{ itemId: items[0].id, quantity: 10 }]);
@@ -108,8 +111,9 @@ export function StockInManager() {
     setEditingVoucher(v);
     setAlertInfo(null);
     setDate(v.date || new Date().toISOString().split('T')[0]);
-    setPerson(v.person || 'Nguyễn Văn Tuấn');
-    setWarehouseId(v.warehouseId || warehouses[0]?.id || 'wh-1');
+    setPerson(v.person || currentUserName);
+    setDepartment(v.department || '');
+    setWarehouseId(v.warehouseId || warehouses[0]?.id || '');
     setNote(v.note || '');
     setLineItems(
       v.items.map((i) => ({
@@ -186,6 +190,7 @@ export function StockInManager() {
       res = updateStockInVoucher(editingVoucher.id, {
         date,
         person,
+        department: department.trim() || undefined,
         warehouseId,
         note,
         items: lineItems,
@@ -194,6 +199,7 @@ export function StockInManager() {
       res = createStockInVoucher({
         date,
         person,
+        department: department.trim() || undefined,
         warehouseId,
         note,
         items: lineItems,
@@ -232,9 +238,14 @@ export function StockInManager() {
     },
     {
       key: 'person',
-      header: 'Người Nhập',
+      header: 'Người Nhập & Bộ Phận',
       sortable: true,
-      render: (v) => <span className="font-semibold text-slate-900 dark:text-slate-100">{v.person}</span>,
+      render: (v) => (
+        <div>
+          <span className="font-semibold text-slate-900 dark:text-slate-100">{v.person}</span>
+          {v.department && <div className="text-[11px] text-emerald-600 dark:text-emerald-400">{v.department}</div>}
+        </div>
+      ),
     },
     {
       key: 'warehouseName',
@@ -261,11 +272,10 @@ export function StockInManager() {
         const status = get24hStatus(v);
         return (
           <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-              status.isEditable
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700'
-            }`}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${status.isEditable
+              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+              : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700'
+              }`}
           >
             <Clock className="h-3 w-3" />
             {status.text}
@@ -302,11 +312,10 @@ export function StockInManager() {
                 handleOpenEdit(v);
               }}
               disabled={!status.isEditable}
-              className={`p-1.5 rounded-lg transition-colors ${
-                status.isEditable
-                  ? 'text-amber-500 hover:text-amber-600 hover:bg-amber-500/10'
-                  : 'text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40'
-              }`}
+              className={`p-1.5 rounded-lg transition-colors ${status.isEditable
+                ? 'text-amber-500 hover:text-amber-600 hover:bg-amber-500/10'
+                : 'text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40'
+                }`}
               title={
                 status.isEditable
                   ? 'Chỉnh sửa phiếu (trong vòng 24h)'
@@ -321,11 +330,10 @@ export function StockInManager() {
                 handleOpenDelete(v);
               }}
               disabled={!status.isEditable}
-              className={`p-1.5 rounded-lg transition-colors ${
-                status.isEditable
-                  ? 'text-rose-500 hover:text-rose-600 hover:bg-rose-500/10'
-                  : 'text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40'
-              }`}
+              className={`p-1.5 rounded-lg transition-colors ${status.isEditable
+                ? 'text-rose-500 hover:text-rose-600 hover:bg-rose-500/10'
+                : 'text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40'
+                }`}
               title={
                 status.isEditable
                   ? 'Xóa phiếu nhập (trong vòng 24h)'
@@ -345,11 +353,10 @@ export function StockInManager() {
       {/* Top Banner alert if any action result */}
       {alertInfo && (
         <div
-          className={`p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${
-            alertInfo.type === 'success'
-              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-              : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
-          }`}
+          className={`p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${alertInfo.type === 'success'
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+            : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+            }`}
         >
           <div className="flex items-center gap-2">
             {alertInfo.type === 'success' ? (
@@ -394,8 +401,8 @@ export function StockInManager() {
         data={inboundVouchers}
         columns={columns}
         rowKey={(v) => v.id}
-        searchKey={(v) => `${v.code} ${v.person} ${v.warehouseName} ${v.note}`}
-        searchPlaceholder="Tìm kiếm số phiếu, người nhập..."
+        searchKey={(v) => `${v.code} ${v.person} ${v.department || ''} ${v.warehouseName} ${v.note}`}
+        searchPlaceholder="Tìm kiếm số phiếu, người nhập, bộ phận..."
         onRowClick={(v) => setViewingVoucher(v)}
       />
 
@@ -435,11 +442,10 @@ export function StockInManager() {
         <form id="stock-in-form" onSubmit={handleSubmit} className="space-y-6">
           {alertInfo && (
             <div
-              className={`p-3 rounded-xl text-xs font-medium flex items-center gap-2 ${
-                alertInfo.type === 'success'
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                  : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
-              }`}
+              className={`p-3 rounded-xl text-xs font-medium flex items-center gap-2 ${alertInfo.type === 'success'
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+                }`}
             >
               {alertInfo.type === 'success' ? (
                 <CheckCircle className="h-4 w-4 shrink-0" />
@@ -460,7 +466,7 @@ export function StockInManager() {
           )}
 
           {/* Form Header Info */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Ngày Nhập
@@ -486,6 +492,29 @@ export function StockInManager() {
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-not-allowed opacity-90"
                 title="Tài khoản đăng nhập hiện tại (không thể chỉnh sửa)"
               />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Bộ Phận Nhận / Phòng Ban
+              </label>
+              <input
+                type="text"
+                list="stock-in-departments"
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                placeholder="VD: Phòng Hành chính, Kỹ thuật..."
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-emerald-500 focus:outline-none"
+              />
+              <datalist id="stock-in-departments">
+                <option value="Phòng Hành chính Nhân sự" />
+                <option value="Phòng Kế toán" />
+                <option value="Phòng Kỹ thuật Công nghệ" />
+                <option value="Phòng Kinh doanh" />
+                <option value="Xưởng Sản xuất" />
+                <option value="Bộ phận Kho" />
+                <option value="Ban Giám đốc" />
+              </datalist>
             </div>
 
             <div>
@@ -622,11 +651,10 @@ export function StockInManager() {
                   const status = get24hStatus(viewingVoucher);
                   return (
                     <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                        status.isEditable
-                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700'
-                      }`}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${status.isEditable
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700'
+                        }`}
                     >
                       <Clock className="h-3.5 w-3.5" />
                       Hạn sửa/xóa: {status.text}
@@ -685,6 +713,12 @@ export function StockInManager() {
                 <span className="text-slate-400">Kho nhập:</span>{' '}
                 <strong className="text-slate-800 dark:text-slate-200">{viewingVoucher.warehouseName}</strong>
               </div>
+              {viewingVoucher.department && (
+                <div className="col-span-2">
+                  <span className="text-slate-400">Bộ phận nhận:</span>{' '}
+                  <strong className="text-emerald-600 dark:text-emerald-400">{viewingVoucher.department}</strong>
+                </div>
+              )}
               <div className="col-span-2">
                 <span className="text-slate-400">Ghi chú:</span>{' '}
                 <span>{viewingVoucher.note || 'Không có ghi chú'}</span>
@@ -702,16 +736,48 @@ export function StockInManager() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {viewingVoucher.items.map((line, idx) => (
-                    <tr key={idx}>
-                      <td className="p-2.5 font-mono text-cyan-500">{line.itemCode}</td>
-                      <td className="p-2.5 font-medium text-slate-900 dark:text-slate-100">{line.itemName}</td>
-                      <td className="p-2.5 text-center text-slate-500">{line.unitName}</td>
-                      <td className="p-2.5 text-right font-bold text-emerald-500">
-                        +{formatNumber(line.quantity)}
-                      </td>
-                    </tr>
-                  ))}
+                  {(() => {
+                    const detailItems =
+                      viewingVoucher.items.length > 0
+                        ? viewingVoucher.items
+                        : logs
+                            .filter(
+                              (l) =>
+                                l.voucherId === viewingVoucher.id ||
+                                (viewingVoucher.code && l.voucherCode === viewingVoucher.code)
+                            )
+                            .map((l) => {
+                              const matchedItem = items.find((i) => i.id === l.itemId || i.code === l.itemCode);
+                              return {
+                                itemId: l.itemId,
+                                itemCode: l.itemCode,
+                                itemName: l.itemName,
+                                unitName: matchedItem?.unitName || '-',
+                                quantity: l.quantity,
+                              };
+                            });
+
+                    if (detailItems.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={4} className="p-4 text-center text-slate-400">
+                            Chưa có dữ liệu chi tiết mặt hàng cho phiếu nhập này
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return detailItems.map((line, idx) => (
+                      <tr key={idx}>
+                        <td className="p-2.5 font-mono text-cyan-500">{line.itemCode}</td>
+                        <td className="p-2.5 font-medium text-slate-900 dark:text-slate-100">{line.itemName}</td>
+                        <td className="p-2.5 text-center text-slate-500">{line.unitName || '-'}</td>
+                        <td className="p-2.5 text-right font-bold text-emerald-500">
+                          +{formatNumber(line.quantity)}
+                        </td>
+                      </tr>
+                    ));
+                  })()}
                 </tbody>
               </table>
             </div>

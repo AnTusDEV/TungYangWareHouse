@@ -15,7 +15,7 @@ export const DEFAULT_SQLSERVER_CONFIG: SQLServerConfig = {
   port: 1433,
   user: 'antu',
   password: 'Ty2025@@',
-  database: 'inventory_db',
+  database: 'inventory_db_test',
   encrypt: false,
 };
 
@@ -101,95 +101,138 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
     }
 
     const items: Item[] = (data.items || []).map((row: any) => ({
-      id: row.id,
-      code: row.code,
-      name: row.name,
-      categoryId: row.category_id || '',
-      categoryName: row.category_name || '',
-      unitId: row.unit_id || '',
-      unitName: row.unit_name || '',
-      warehouseId: row.warehouse_id || '',
-      warehouseName: row.warehouse_name || '',
-      stockQuantity: row.stock_quantity ?? 0,
-      minStockLevel: row.min_stock_level ?? 0,
-      maxStockLevel: row.max_stock_level ?? 100,
-      note: row.note || '',
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      id: String(row.id || '').trim(),
+      code: String(row.code || '').trim(),
+      name: String(row.name || ''),
+      categoryId: String(row.category_id || '').trim(),
+      categoryName: String(row.category_name || ''),
+      unitId: String(row.unit_id || '').trim(),
+      unitName: String(row.unit_name || ''),
+      warehouseId: String(row.warehouse_id || '').trim(),
+      warehouseName: String(row.warehouse_name || ''),
+      stockQuantity: Number(row.stock_quantity) || 0,
+      minStockLevel: Number(row.min_stock_level) || 0,
+      maxStockLevel: Number(row.max_stock_level) || 100,
+      note: String(row.note || ''),
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
     }));
 
+    const itemById = new Map<string, Item>(items.map((it) => [it.id, it]));
+    const itemByCode = new Map<string, Item>(items.map((it) => [it.code, it]));
+
     const categories: Category[] = (data.categories || []).map((row: any) => ({
-      id: row.id,
-      code: row.code,
-      name: row.name,
-      description: row.description || '',
+      id: String(row.id || '').trim(),
+      code: String(row.code || '').trim(),
+      name: String(row.name || ''),
+      description: String(row.description || ''),
     }));
 
     const warehouses: Warehouse[] = (data.warehouses || []).map((row: any) => ({
-      id: row.id,
-      code: row.code,
-      name: row.name,
-      location: row.location || '',
-      manager: row.manager || '',
-      description: row.description || '',
+      id: String(row.id || '').trim(),
+      code: String(row.code || '').trim(),
+      name: String(row.name || ''),
+      location: String(row.location || ''),
+      manager: String(row.manager || ''),
+      description: String(row.description || ''),
       isDefault: Boolean(row.is_default),
     }));
 
     const units: Unit[] = (data.units || []).map((row: any) => ({
-      id: row.id,
-      name: row.name,
-      description: row.description || '',
+      id: String(row.id || '').trim(),
+      name: String(row.name || ''),
+      description: String(row.description || ''),
+    }));
+
+    const logs: InventoryLog[] = (data.logs || []).map((row: any) => ({
+      id: String(row.id || '').trim(),
+      voucherId: String(row.voucher_id || '').trim(),
+      voucherCode: String(row.voucher_code || '').trim(),
+      type: row.type === 'OUT' ? 'OUT' : 'IN',
+      date: String(row.date || ''),
+      itemId: String(row.item_id || '').trim(),
+      itemCode: String(row.item_code || '').trim(),
+      itemName: String(row.item_name || ''),
+      categoryName: String(row.category_name || ''),
+      warehouseId: String(row.warehouse_id || '').trim(),
+      warehouseName: String(row.warehouse_name || ''),
+      quantity: Number(row.quantity) || 0,
+      previousStock: Number(row.previous_stock) || 0,
+      newStock: Number(row.new_stock) || 0,
+      person: String(row.person || ''),
+      department: row.department ? String(row.department) : undefined,
+      note: String(row.note || ''),
     }));
 
     const rawVoucherItemsMap = new Map<string, any[]>();
     (data.voucherItems || []).forEach((row: any) => {
-      const list = rawVoucherItemsMap.get(row.voucher_id) || [];
+      const voucherId = String(row.voucher_id || '').trim();
+      if (!voucherId) return;
+      const list = rawVoucherItemsMap.get(voucherId) || [];
       list.push({
-        itemId: row.item_id,
-        itemCode: row.item_code,
-        itemName: row.item_name,
-        unitName: row.unit_name,
-        quantity: row.quantity,
-        currentStock: row.current_stock,
+        itemId: String(row.item_id || '').trim(),
+        itemCode: String(row.item_code || '').trim(),
+        itemName: String(row.item_name || ''),
+        unitName: String(row.unit_name || ''),
+        quantity: Number(row.quantity) || 0,
+        currentStock: Number(row.current_stock) || 0,
       });
-      rawVoucherItemsMap.set(row.voucher_id, list);
+      rawVoucherItemsMap.set(voucherId, list);
     });
 
-    const vouchers: StockVoucher[] = (data.vouchers || []).map((row: any) => ({
-      id: row.id,
-      code: row.code,
-      type: row.type as 'IMPORT' | 'EXPORT',
-      date: row.date,
-      person: row.person || '',
-      department: row.department || '',
-      warehouseId: row.warehouse_id || '',
-      warehouseName: row.warehouse_name || '',
-      note: row.note || '',
-      items: rawVoucherItemsMap.get(row.id) || [],
-      totalQuantity: row.total_quantity || 0,
-      createdAt: row.created_at,
-    }));
+    // Track vouchers that needed log-fallback so we can auto-repair them in the DB
+    const vouchersNeedingRepair: { voucherId: string; items: any[] }[] = [];
 
-    const logs: InventoryLog[] = (data.logs || []).map((row: any) => ({
-      id: row.id,
-      voucherId: row.voucher_id,
-      voucherCode: row.voucher_code,
-      type: row.type as 'IMPORT' | 'EXPORT',
-      date: row.date,
-      itemId: row.item_id,
-      itemCode: row.item_code,
-      itemName: row.item_name,
-      categoryName: row.category_name || '',
-      warehouseId: row.warehouse_id || '',
-      warehouseName: row.warehouse_name || '',
-      quantity: row.quantity,
-      previousStock: row.previous_stock,
-      newStock: row.new_stock,
-      person: row.person || '',
-      department: row.department || '',
-      note: row.note || '',
-      createdAt: row.created_at,
-    }));
+    const vouchers: StockVoucher[] = (data.vouchers || []).map((row: any) => {
+      const voucherId = String(row.id || '').trim();
+      const voucherCode = String(row.code || '').trim();
+      let lineItems = rawVoucherItemsMap.get(voucherId) || [];
+      let repairedFromLogs = false;
+
+      // Fallback: reconstruct line items from inventory_logs if stock_voucher_items is empty
+      if (lineItems.length === 0) {
+        const matchingLogs = logs.filter(
+          (l) =>
+            (l.voucherId && l.voucherId === voucherId) ||
+            (l.voucherCode && voucherCode && l.voucherCode === voucherCode)
+        );
+        lineItems = matchingLogs.map((l) => {
+          const matchedItem = itemById.get(l.itemId) || itemByCode.get(l.itemCode);
+          return {
+            itemId: l.itemId,
+            itemCode: l.itemCode,
+            itemName: l.itemName,
+            unitName: matchedItem?.unitName || '',
+            quantity: l.quantity,
+            currentStock: l.newStock,
+          };
+        });
+        if (lineItems.length > 0) {
+          repairedFromLogs = true;
+        }
+      }
+
+      if (repairedFromLogs) {
+        vouchersNeedingRepair.push({ voucherId, items: lineItems });
+      }
+
+      const computedTotalQty = lineItems.reduce((sum, li) => sum + (Number(li.quantity) || 0), 0);
+
+      return {
+        id: voucherId,
+        code: voucherCode,
+        type: row.type === 'OUT' ? 'OUT' : 'IN',
+        date: String(row.date || ''),
+        person: String(row.person || ''),
+        department: row.department ? String(row.department) : undefined,
+        warehouseId: String(row.warehouse_id || '').trim(),
+        warehouseName: String(row.warehouse_name || ''),
+        note: row.note ? String(row.note) : undefined,
+        items: lineItems,
+        totalQuantity: Number(row.total_quantity) || computedTotalQty,
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      };
+    });
 
     const users: User[] = (data.users || []).map((row: any) => {
       const getProp = (candidates: string[], fallback = '') => {
@@ -226,6 +269,21 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
       };
     });
 
+    // Auto-repair: fire-and-forget INSERT for vouchers whose items were missing
+    // from stock_voucher_items but recoverable from inventory_logs.
+    // Runs in background — does NOT block the fetch result.
+    if (vouchersNeedingRepair.length > 0) {
+      vouchersNeedingRepair.forEach(({ voucherId, items: repairItems }) => {
+        fetch('/api/mssql/repair-voucher-items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config, voucherId, items: repairItems }),
+        }).catch(() => {
+          // silent — repair is best-effort, never breaks UI
+        });
+      });
+    }
+
     return {
       success: true,
       items,
@@ -241,124 +299,60 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
   }
 }
 
-export async function saveUserToSQLServer(config: SQLServerConfig, user: User, passwordHash?: string) {
+async function postToSQLServer(endpoint: string, payload: unknown, actionLabel: string) {
   try {
-    await fetch('/api/mssql/save-user', {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, user, passwordHash }),
+      body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      console.error(`Failed to ${actionLabel} on SQL Server:`, errBody.message || res.statusText);
+    }
   } catch (err) {
-    console.error('Failed to sync user to SQL Server', err);
+    console.error(`Failed to ${actionLabel} on SQL Server`, err);
   }
+}
+
+export async function saveUserToSQLServer(config: SQLServerConfig, user: User, passwordHash?: string) {
+  await postToSQLServer('/api/mssql/save-user', { config, user, passwordHash }, 'sync user');
 }
 
 export async function deleteUserFromSQLServer(config: SQLServerConfig, id: string) {
-  try {
-    await fetch('/api/mssql/delete-user', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, id }),
-    });
-  } catch (err) {
-    console.error('Failed to delete user from SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/delete-user', { config, id }, 'delete user');
 }
 
 export async function saveItemToSQLServer(config: SQLServerConfig, item: Item) {
-  try {
-    await fetch('/api/mssql/save-item', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, item }),
-    });
-  } catch (err) {
-    console.error('Failed to sync item to SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/save-item', { config, item }, 'sync item');
 }
 
 export async function deleteItemFromSQLServer(config: SQLServerConfig, id: string) {
-  try {
-    await fetch('/api/mssql/delete-item', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, id }),
-    });
-  } catch (err) {
-    console.error('Failed to delete item from SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/delete-item', { config, id }, 'delete item');
 }
 
 export async function saveWarehouseToSQLServer(config: SQLServerConfig, warehouse: Warehouse) {
-  try {
-    await fetch('/api/mssql/save-warehouse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, warehouse }),
-    });
-  } catch (err) {
-    console.error('Failed to sync warehouse to SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/save-warehouse', { config, warehouse }, 'sync warehouse');
 }
 
 export async function deleteWarehouseFromSQLServer(config: SQLServerConfig, id: string) {
-  try {
-    await fetch('/api/mssql/delete-warehouse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, id }),
-    });
-  } catch (err) {
-    console.error('Failed to delete warehouse from SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/delete-warehouse', { config, id }, 'delete warehouse');
 }
 
 export async function saveCategoryToSQLServer(config: SQLServerConfig, category: Category) {
-  try {
-    await fetch('/api/mssql/save-category', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, category }),
-    });
-  } catch (err) {
-    console.error('Failed to sync category to SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/save-category', { config, category }, 'sync category');
 }
 
 export async function deleteCategoryFromSQLServer(config: SQLServerConfig, id: string) {
-  try {
-    await fetch('/api/mssql/delete-category', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, id }),
-    });
-  } catch (err) {
-    console.error('Failed to delete category from SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/delete-category', { config, id }, 'delete category');
 }
 
 export async function saveUnitToSQLServer(config: SQLServerConfig, unit: Unit) {
-  try {
-    await fetch('/api/mssql/save-unit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, unit }),
-    });
-  } catch (err) {
-    console.error('Failed to sync unit to SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/save-unit', { config, unit }, 'sync unit');
 }
 
 export async function deleteUnitFromSQLServer(config: SQLServerConfig, id: string) {
-  try {
-    await fetch('/api/mssql/delete-unit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, id }),
-    });
-  } catch (err) {
-    console.error('Failed to delete unit from SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/delete-unit', { config, id }, 'delete unit');
 }
 
 export async function saveVoucherToSQLServer(
@@ -367,15 +361,7 @@ export async function saveVoucherToSQLServer(
   logs: InventoryLog[],
   updatedItems: Item[]
 ) {
-  try {
-    await fetch('/api/mssql/save-voucher', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, voucher, logs, updatedItems }),
-    });
-  } catch (err) {
-    console.error('Failed to sync voucher to SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/save-voucher', { config, voucher, logs, updatedItems }, 'sync voucher');
 }
 
 export async function deleteVoucherFromSQLServer(
@@ -383,13 +369,5 @@ export async function deleteVoucherFromSQLServer(
   id: string,
   updatedItems: Item[]
 ) {
-  try {
-    await fetch('/api/mssql/delete-voucher', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, id, updatedItems }),
-    });
-  } catch (err) {
-    console.error('Failed to delete voucher from SQL Server', err);
-  }
+  await postToSQLServer('/api/mssql/delete-voucher', { config, id, updatedItems }, 'delete voucher');
 }

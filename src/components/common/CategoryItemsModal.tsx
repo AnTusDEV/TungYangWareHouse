@@ -27,8 +27,12 @@ export function CategoryItemsModal({ isOpen, onClose, category }: CategoryItemsM
 
   if (!category) return null;
 
-  // Filter items for this category
-  const categoryItems = items.filter((item) => item.categoryId === category.id);
+  // Filter items for this category (matching by ID or Name)
+  const categoryItems = items.filter(
+    (item) =>
+      item.categoryId === category.id ||
+      (category.name && item.categoryName?.trim().toLowerCase() === category.name.trim().toLowerCase())
+  );
 
   // Search filter
   const filteredItems = categoryItems.filter(

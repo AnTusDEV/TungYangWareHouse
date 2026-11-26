@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
-import mysql from 'mysql2/promise';
 import mssql from 'mssql';
 import { createServer as createViteServer } from 'vite';
 
@@ -53,183 +52,114 @@ function mapDbRowToUser(row: any): ServerUser {
   };
 }
 
-async function getDbClient() {
-  try {
-    const conn = await getMySQLConnection({}, true);
-    if (conn) return { type: 'mysql' as const, conn };
-  } catch (e) { }
-
+async function getDbClient(): Promise<mssql.ConnectionPool | null> {
   try {
     const pool = await getMSSQLPool({}, true);
-    if (pool) return { type: 'mssql' as const, pool };
+    if (pool) return pool;
   } catch (e) { }
 
   return null;
 }
 
-async function ensureUsersTable(db: { type: 'mysql'; conn: any } | { type: 'mssql'; pool: any }) {
-  if (db.type === 'mysql') {
-    await db.conn.query(`
-      CREATE TABLE IF NOT EXISTS users (
+async function ensureUsersTable(pool: mssql.ConnectionPool) {
+  await pool.request().query(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'users')
+    BEGIN
+      CREATE TABLE users (
         id VARCHAR(50) PRIMARY KEY,
         username VARCHAR(50) NOT NULL UNIQUE,
-        password_hash VARCHAR(255) NOT NULL,
-        full_name VARCHAR(255) NOT NULL,
-        position VARCHAR(255),
-        notes TEXT,
+        password_hash NVARCHAR(255) NOT NULL,
+        full_name NVARCHAR(255) NOT NULL,
+        position NVARCHAR(255),
+        notes NVARCHAR(MAX),
         role VARCHAR(20) DEFAULT 'user',
         status VARCHAR(20) DEFAULT 'active',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE()
+      );
+    END
+
+    IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password')
+      ALTER TABLE users ALTER COLUMN password NVARCHAR(255) NULL;
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password_hash')
+      ALTER TABLE users ADD password_hash NVARCHAR(255) NULL;
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'role')
+      ALTER TABLE users ADD role VARCHAR(20) DEFAULT 'user';
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'status')
+      ALTER TABLE users ADD status VARCHAR(20) DEFAULT 'active';
+  `);
+
+  const res = await pool.request().query('SELECT COUNT(*) as cnt FROM users');
+  if (res.recordset && res.recordset[0] && Number(res.recordset[0].cnt) === 0) {
+    const defaultAdminHash = bcrypt.hashSync('admin123', 10);
+    const defaultUserHash = bcrypt.hashSync('user123', 10);
+    const req = pool.request();
+    req.input('adminHash', mssql.NVarChar(255), defaultAdminHash);
+    req.input('userHash', mssql.NVarChar(255), defaultUserHash);
+    await req.query(`
+      INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
+      VALUES 
+        ('usr_admin', 'admin', @adminHash, N'Quản Trị Viên Hệ Thống', N'Quản trị viên', N'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', GETDATE()),
+        ('usr_nhanvien', 'nhanvien', @userHash, N'Nguyễn Văn Kho', N'Thủ kho', N'Tài khoản nhân viên vận hành kho', 'user', 'active', GETDATE());
     `);
-
-    const [rows]: any = await db.conn.query('SELECT COUNT(*) as cnt FROM users');
-    if (rows && rows[0] && Number(rows[0].cnt) === 0) {
-      const defaultAdminHash = bcrypt.hashSync('admin123', 10);
-      const defaultUserHash = bcrypt.hashSync('user123', 10);
-      await db.conn.query(`
-        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
-        VALUES 
-          ('usr_admin', 'admin', ?, 'Quản Trị Viên Hệ Thống', 'Quản trị viên', 'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', NOW()),
-          ('usr_nhanvien', 'nhanvien', ?, 'Nguyễn Văn Kho', 'Thủ kho', 'Tài khoản nhân viên vận hành kho', 'user', 'active', NOW());
-      `, [defaultAdminHash, defaultUserHash]);
-    }
-  } else {
-    await db.pool.request().query(`
-      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'users')
-      BEGIN
-        CREATE TABLE users (
-          id VARCHAR(50) PRIMARY KEY,
-          username VARCHAR(50) NOT NULL UNIQUE,
-          password_hash NVARCHAR(255) NOT NULL,
-          full_name NVARCHAR(255) NOT NULL,
-          position NVARCHAR(255),
-          notes NVARCHAR(MAX),
-          role VARCHAR(20) DEFAULT 'user',
-          status VARCHAR(20) DEFAULT 'active',
-          created_at DATETIME DEFAULT GETDATE(),
-          updated_at DATETIME DEFAULT GETDATE()
-        );
-      END
-
-      IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password')
-        ALTER TABLE users ALTER COLUMN password NVARCHAR(255) NULL;
-
-      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password_hash')
-        ALTER TABLE users ADD password_hash NVARCHAR(255) NULL;
-
-      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'role')
-        ALTER TABLE users ADD role VARCHAR(20) DEFAULT 'user';
-
-      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'status')
-        ALTER TABLE users ADD status VARCHAR(20) DEFAULT 'active';
-    `);
-
-    const res = await db.pool.request().query('SELECT COUNT(*) as cnt FROM users');
-    if (res.recordset && res.recordset[0] && Number(res.recordset[0].cnt) === 0) {
-      const defaultAdminHash = bcrypt.hashSync('admin123', 10);
-      const defaultUserHash = bcrypt.hashSync('user123', 10);
-      const req = db.pool.request();
-      req.input('adminHash', mssql.NVarChar(255), defaultAdminHash);
-      req.input('userHash', mssql.NVarChar(255), defaultUserHash);
-      await req.query(`
-        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
-        VALUES 
-          ('usr_admin', 'admin', @adminHash, N'Quản Trị Viên Hệ Thống', N'Quản trị viên', N'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', GETDATE()),
-          ('usr_nhanvien', 'nhanvien', @userHash, N'Nguyễn Văn Kho', N'Thủ kho', N'Tài khoản nhân viên vận hành kho', 'user', 'active', GETDATE());
-      `);
-    }
   }
 }
 
 async function findUserByUsernameFromDb(username: string): Promise<ServerUser | null> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
   const cleanUsername = username.trim().toLowerCase();
 
-  if (db.type === 'mysql') {
-    try {
-      const [rows]: any = await db.conn.execute('SELECT * FROM users WHERE LOWER(username) = ?', [cleanUsername]);
-      await db.conn.end().catch(() => { });
-      if (rows && rows.length > 0) return mapDbRowToUser(rows[0]);
-      return null;
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const req = db.pool.request();
-      req.input('username', mssql.VarChar(50), cleanUsername);
-      const res = await req.query('SELECT * FROM users WHERE LOWER(username) = @username');
-      await db.pool.close().catch(() => { });
-      if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
-      return null;
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
-    }
+  try {
+    const req = pool.request();
+    req.input('username', mssql.VarChar(50), cleanUsername);
+    const res = await req.query('SELECT * FROM users WHERE LOWER(username) = @username');
+    await pool.close().catch(() => { });
+    if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
+    return null;
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
 async function findUserByIdFromDb(userId: string): Promise<ServerUser | null> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
 
-  if (db.type === 'mysql') {
-    try {
-      const [rows]: any = await db.conn.execute('SELECT * FROM users WHERE id = ?', [userId]);
-      await db.conn.end().catch(() => { });
-      if (rows && rows.length > 0) return mapDbRowToUser(rows[0]);
-      return null;
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const req = db.pool.request();
-      req.input('id', mssql.VarChar(50), userId);
-      const res = await req.query('SELECT * FROM users WHERE id = @id');
-      await db.pool.close().catch(() => { });
-      if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
-      return null;
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
-    }
+  try {
+    const req = pool.request();
+    req.input('id', mssql.VarChar(50), userId);
+    const res = await req.query('SELECT * FROM users WHERE id = @id');
+    await pool.close().catch(() => { });
+    if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
+    return null;
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
 async function getAllUsersFromDb(): Promise<ServerUser[]> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
 
-  if (db.type === 'mysql') {
-    try {
-      const [rows]: any = await db.conn.query('SELECT * FROM users ORDER BY created_at ASC');
-      await db.conn.end().catch(() => { });
-      return (rows || []).map(mapDbRowToUser);
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const res = await db.pool.request().query('SELECT * FROM users ORDER BY created_at ASC');
-      await db.pool.close().catch(() => { });
-      return (res.recordset || []).map(mapDbRowToUser);
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
-    }
+  try {
+    const res = await pool.request().query('SELECT * FROM users ORDER BY created_at ASC');
+    await pool.close().catch(() => { });
+    return (res.recordset || []).map(mapDbRowToUser);
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
@@ -244,250 +174,149 @@ async function saveUserToDb(user: {
   passwordHash?: string;
   password?: string;
 }): Promise<void> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
 
   const cleanUsername = user.username.trim().toLowerCase();
   const rawPass = user.passwordHash || user.password;
   const hashToUse = rawPass ? hashPasswordIfNeeded(rawPass) : undefined;
 
-  if (db.type === 'mysql') {
-    try {
-      if (hashToUse) {
-        await db.conn.execute(`
-          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
-          ON DUPLICATE KEY UPDATE
-            username = VALUES(username),
-            password_hash = VALUES(password_hash),
-            full_name = VALUES(full_name),
-            position = VALUES(position),
-            notes = VALUES(notes),
-            role = VALUES(role),
-            status = VALUES(status),
-            updated_at = NOW();
-        `, [
-          user.id,
-          cleanUsername,
-          hashToUse,
-          user.fullName,
-          user.position || '',
-          user.notes || '',
-          user.role || 'user',
-          user.status || 'active',
-        ]);
-      } else {
-        await db.conn.execute(`
-          INSERT INTO users (id, username, full_name, position, notes, role, status, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
-          ON DUPLICATE KEY UPDATE
-            full_name = VALUES(full_name),
-            position = VALUES(position),
-            notes = VALUES(notes),
-            role = VALUES(role),
-            status = VALUES(status),
-            updated_at = NOW();
-        `, [
-          user.id,
-          cleanUsername,
-          user.fullName,
-          user.position || '',
-          user.notes || '',
-          user.role || 'user',
-          user.status || 'active',
-        ]);
-      }
-      await db.conn.end().catch(() => { });
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const req = db.pool.request();
-      req.input('id', mssql.VarChar(50), user.id);
-      req.input('username', mssql.VarChar(50), cleanUsername);
-      req.input('full_name', mssql.NVarChar(255), user.fullName);
-      req.input('position', mssql.NVarChar(255), user.position || '');
-      req.input('notes', mssql.NVarChar(mssql.MAX), user.notes || '');
-      req.input('role', mssql.VarChar(20), user.role || 'user');
-      req.input('status', mssql.VarChar(20), user.status || 'active');
+  try {
+    const req = pool.request();
+    req.input('id', mssql.VarChar(50), user.id);
+    req.input('username', mssql.VarChar(50), cleanUsername);
+    req.input('full_name', mssql.NVarChar(255), user.fullName);
+    req.input('position', mssql.NVarChar(255), user.position || '');
+    req.input('notes', mssql.NVarChar(mssql.MAX), user.notes || '');
+    req.input('role', mssql.VarChar(20), user.role || 'user');
+    req.input('status', mssql.VarChar(20), user.status || 'active');
 
-      if (hashToUse) {
-        req.input('password_hash', mssql.NVarChar(255), hashToUse);
-        await req.query(`
-          IF EXISTS (SELECT 1 FROM users WHERE id = @id)
-          BEGIN
-            UPDATE users SET
-              username = @username,
-              password_hash = @password_hash,
-              full_name = @full_name,
-              position = @position,
-              notes = @notes,
-              role = @role,
-              status = @status,
-              updated_at = GETDATE()
-            WHERE id = @id;
-          END
-          ELSE
-          BEGIN
-            INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
-            VALUES (@id, @username, @password_hash, @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
-          END
-        `);
-      } else {
-        await req.query(`
-          IF EXISTS (SELECT 1 FROM users WHERE id = @id)
-          BEGIN
-            UPDATE users SET
-              username = @username,
-              full_name = @full_name,
-              position = @position,
-              notes = @notes,
-              role = @role,
-              status = @status,
-              updated_at = GETDATE()
-            WHERE id = @id;
-          END
-          ELSE
-          BEGIN
-            INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
-            VALUES (@id, @username, N'', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
-          END
-        `);
-      }
-      await db.pool.close().catch(() => { });
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
+    if (hashToUse) {
+      req.input('password_hash', mssql.NVarChar(255), hashToUse);
+      await req.query(`
+        IF EXISTS (SELECT 1 FROM users WHERE id = @id)
+        BEGIN
+          UPDATE users SET
+            username = @username,
+            password_hash = @password_hash,
+            full_name = @full_name,
+            position = @position,
+            notes = @notes,
+            role = @role,
+            status = @status,
+            updated_at = GETDATE()
+          WHERE id = @id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
+          VALUES (@id, @username, @password_hash, @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+        END
+      `);
+    } else {
+      await req.query(`
+        IF EXISTS (SELECT 1 FROM users WHERE id = @id)
+        BEGIN
+          UPDATE users SET
+            username = @username,
+            full_name = @full_name,
+            position = @position,
+            notes = @notes,
+            role = @role,
+            status = @status,
+            updated_at = GETDATE()
+          WHERE id = @id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at, updated_at)
+          VALUES (@id, @username, N'', @full_name, @position, @notes, @role, @status, GETDATE(), GETDATE());
+        END
+      `);
     }
+    await pool.close().catch(() => { });
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
 async function deleteUserFromDb(userId: string): Promise<void> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
 
-  if (db.type === 'mysql') {
-    try {
-      await db.conn.execute('DELETE FROM users WHERE id = ?', [userId]);
-      await db.conn.end().catch(() => { });
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const req = db.pool.request();
-      req.input('id', mssql.VarChar(50), userId);
-      await req.query('DELETE FROM users WHERE id = @id');
-      await db.pool.close().catch(() => { });
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
-    }
+  try {
+    const req = pool.request();
+    req.input('id', mssql.VarChar(50), userId);
+    await req.query('DELETE FROM users WHERE id = @id');
+    await pool.close().catch(() => { });
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
 async function updateUserPasswordInDb(userId: string, newPasswordPlain: string): Promise<void> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
   const passwordHash = hashPasswordIfNeeded(newPasswordPlain);
 
-  if (db.type === 'mysql') {
-    try {
-      await db.conn.execute('UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?', [passwordHash, userId]);
-      await db.conn.end().catch(() => { });
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const req = db.pool.request();
-      req.input('id', mssql.VarChar(50), userId);
-      req.input('password_hash', mssql.NVarChar(255), passwordHash);
-      await req.query('UPDATE users SET password_hash = @password_hash, updated_at = GETDATE() WHERE id = @id');
-      await db.pool.close().catch(() => { });
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
-    }
+  try {
+    const req = pool.request();
+    req.input('id', mssql.VarChar(50), userId);
+    req.input('password_hash', mssql.NVarChar(255), passwordHash);
+    await req.query('UPDATE users SET password_hash = @password_hash, updated_at = GETDATE() WHERE id = @id');
+    await pool.close().catch(() => { });
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
 async function updateUserStatusInDb(userId: string, status: 'active' | 'locked'): Promise<void> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
 
-  if (db.type === 'mysql') {
-    try {
-      await db.conn.execute('UPDATE users SET status = ?, updated_at = NOW() WHERE id = ?', [status, userId]);
-      await db.conn.end().catch(() => { });
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const req = db.pool.request();
-      req.input('id', mssql.VarChar(50), userId);
-      req.input('status', mssql.VarChar(20), status);
-      await req.query('UPDATE users SET status = @status, updated_at = GETDATE() WHERE id = @id');
-      await db.pool.close().catch(() => { });
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
-    }
+  try {
+    const req = pool.request();
+    req.input('id', mssql.VarChar(50), userId);
+    req.input('status', mssql.VarChar(20), status);
+    await req.query('UPDATE users SET status = @status, updated_at = GETDATE() WHERE id = @id');
+    await pool.close().catch(() => { });
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
 async function updateUserProfileInDb(userId: string, data: { fullName?: string; position?: string; notes?: string; role?: 'admin' | 'user' }): Promise<void> {
-  const db = await getDbClient();
-  if (!db) throw new Error('Không thể kết nối tới cơ sở dữ liệu (MySQL / SQL Server)');
+  const pool = await getDbClient();
+  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
 
-  await ensureUsersTable(db);
+  await ensureUsersTable(pool);
 
-  if (db.type === 'mysql') {
-    try {
-      const updates: string[] = ['updated_at = NOW()'];
-      const params: any[] = [];
-      if (data.fullName !== undefined) { updates.push('full_name = ?'); params.push(data.fullName); }
-      if (data.position !== undefined) { updates.push('position = ?'); params.push(data.position); }
-      if (data.notes !== undefined) { updates.push('notes = ?'); params.push(data.notes); }
-      if (data.role !== undefined) { updates.push('role = ?'); params.push(data.role); }
-      params.push(userId);
+  try {
+    const req = pool.request();
+    req.input('id', mssql.VarChar(50), userId);
+    const updates: string[] = ['updated_at = GETDATE()'];
+    if (data.fullName !== undefined) { req.input('full_name', mssql.NVarChar(255), data.fullName); updates.push('full_name = @full_name'); }
+    if (data.position !== undefined) { req.input('position', mssql.NVarChar(255), data.position); updates.push('position = @position'); }
+    if (data.notes !== undefined) { req.input('notes', mssql.NVarChar(mssql.MAX), data.notes); updates.push('notes = @notes'); }
+    if (data.role !== undefined) { req.input('role', mssql.VarChar(20), data.role); updates.push('role = @role'); }
 
-      await db.conn.execute(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
-      await db.conn.end().catch(() => { });
-    } catch (err) {
-      await db.conn.end().catch(() => { });
-      throw err;
-    }
-  } else {
-    try {
-      const req = db.pool.request();
-      req.input('id', mssql.VarChar(50), userId);
-      const updates: string[] = ['updated_at = GETDATE()'];
-      if (data.fullName !== undefined) { req.input('full_name', mssql.NVarChar(255), data.fullName); updates.push('full_name = @full_name'); }
-      if (data.position !== undefined) { req.input('position', mssql.NVarChar(255), data.position); updates.push('position = @position'); }
-      if (data.notes !== undefined) { req.input('notes', mssql.NVarChar(mssql.MAX), data.notes); updates.push('notes = @notes'); }
-      if (data.role !== undefined) { req.input('role', mssql.VarChar(20), data.role); updates.push('role = @role'); }
-
-      await req.query(`UPDATE users SET ${updates.join(', ')} WHERE id = @id`);
-      await db.pool.close().catch(() => { });
-    } catch (err) {
-      await db.pool.close().catch(() => { });
-      throw err;
-    }
+    await req.query(`UPDATE users SET ${updates.join(', ')} WHERE id = @id`);
+    await pool.close().catch(() => { });
+  } catch (err) {
+    await pool.close().catch(() => { });
+    throw err;
   }
 }
 
@@ -799,609 +628,6 @@ function sanitizeIdentifier(name: string): string {
   return name.replace(/[^a-zA-Z0-9_]/g, '');
 }
 
-// Helper to get MySQL connection
-async function getMySQLConnection(config: any, includeDatabase = true) {
-  const host = config?.host || process.env.MYSQL_HOST || '127.0.0.1';
-  const port = Number(config?.port || process.env.MYSQL_PORT || 3306);
-  const user = config?.user || process.env.MYSQL_USER || 'root';
-  const password = config?.password !== undefined ? config.password : (process.env.MYSQL_PASSWORD || '');
-  const database = config?.database || process.env.MYSQL_DATABASE || 'inventory_db';
-  const ssl = config?.ssl ? { rejectUnauthorized: false } : undefined;
-
-  const connConfig: any = {
-    host,
-    port,
-    user,
-    password,
-    ssl,
-    connectTimeout: 8000,
-  };
-
-  if (includeDatabase && database) {
-    connConfig.database = database;
-  }
-
-  return await mysql.createConnection(connConfig);
-}
-
-// 1. Test MySQL Connection Endpoint
-app.post('/api/mysql/test', async (req, res) => {
-  let conn;
-  try {
-    const config = req.body;
-    // Try connecting to MySQL server without specifying DB first to verify credentials & host
-    conn = await getMySQLConnection(config, false);
-    await conn.query('SELECT 1');
-
-    const dbName = sanitizeIdentifier(config?.database || 'inventory_db');
-    if (dbName) {
-      await conn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
-    }
-    await conn.end();
-
-    // Now connect with DB
-    conn = await getMySQLConnection(config, true);
-    await conn.query('SELECT 1');
-    await conn.end();
-
-    res.json({
-      success: true,
-      message: `Kết nối thành công tới MySQL Server (${config.host || '127.0.0.1'}:${config.port || 3306}) - CSDL: ${config.database || 'inventory_db'}`,
-    });
-  } catch (err: any) {
-    if (conn) {
-      try { await conn.end(); } catch (_) { }
-    }
-    console.error('MySQL Test Connection Error:', err);
-    res.status(400).json({
-      success: false,
-      message: err.message || 'Không thể kết nối tới MySQL server',
-      code: err.code,
-    });
-  }
-});
-
-// 2. Initialize Tables Endpoint
-app.post('/api/mysql/init-tables', async (req, res) => {
-  let conn;
-  try {
-    const config = req.body;
-    const dbName = sanitizeIdentifier(config?.database || 'inventory_db');
-    conn = await getMySQLConnection(config, false);
-    await conn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
-    await conn.query(`USE \`${dbName}\``);
-
-    // Create categories table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS categories (
-        id VARCHAR(50) PRIMARY KEY,
-        code VARCHAR(50) NOT NULL,
-        name VARCHAR(255) NOT NULL,
-        description TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Create warehouses table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS warehouses (
-        id VARCHAR(50) PRIMARY KEY,
-        code VARCHAR(50) NOT NULL,
-        name VARCHAR(255) NOT NULL,
-        location TEXT,
-        manager VARCHAR(255),
-        description TEXT,
-        is_default TINYINT(1) DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Create units table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS units (
-        id VARCHAR(50) PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        description TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Create items table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS items (
-        id VARCHAR(50) PRIMARY KEY,
-        code VARCHAR(50) NOT NULL,
-        name VARCHAR(255) NOT NULL,
-        category_id VARCHAR(50),
-        category_name VARCHAR(255),
-        unit_id VARCHAR(50),
-        unit_name VARCHAR(255),
-        warehouse_id VARCHAR(50),
-        warehouse_name VARCHAR(255),
-        stock_quantity INT DEFAULT 0,
-        min_stock_level INT DEFAULT 0,
-        max_stock_level INT DEFAULT 100,
-        note TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Create stock_vouchers table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS stock_vouchers (
-        id VARCHAR(50) PRIMARY KEY,
-        code VARCHAR(50) NOT NULL,
-        type VARCHAR(10) NOT NULL,
-        date VARCHAR(20) NOT NULL,
-        person VARCHAR(255),
-        department VARCHAR(255),
-        warehouse_id VARCHAR(50),
-        warehouse_name VARCHAR(255),
-        note TEXT,
-        total_quantity INT DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Create stock_voucher_items table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS stock_voucher_items (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        voucher_id VARCHAR(50) NOT NULL,
-        item_id VARCHAR(50) NOT NULL,
-        item_code VARCHAR(50),
-        item_name VARCHAR(255),
-        unit_name VARCHAR(255),
-        quantity INT DEFAULT 0,
-        current_stock INT DEFAULT 0
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Create inventory_logs table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS inventory_logs (
-        id VARCHAR(50) PRIMARY KEY,
-        voucher_id VARCHAR(50) NOT NULL,
-        voucher_code VARCHAR(50) NOT NULL,
-        type VARCHAR(10) NOT NULL,
-        date VARCHAR(20) NOT NULL,
-        item_id VARCHAR(50) NOT NULL,
-        item_code VARCHAR(50),
-        item_name VARCHAR(255),
-        category_name VARCHAR(255),
-        warehouse_id VARCHAR(50),
-        warehouse_name VARCHAR(255),
-        quantity INT DEFAULT 0,
-        previous_stock INT DEFAULT 0,
-        new_stock INT DEFAULT 0,
-        person VARCHAR(255),
-        department VARCHAR(255),
-        note TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Create users table
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id VARCHAR(50) PRIMARY KEY,
-        username VARCHAR(50) NOT NULL UNIQUE,
-        password_hash VARCHAR(255) NOT NULL,
-        full_name VARCHAR(255) NOT NULL,
-        position VARCHAR(255),
-        notes TEXT,
-        role VARCHAR(20) DEFAULT 'user',
-        status VARCHAR(20) DEFAULT 'active',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    // Seed default users if empty
-    const [userCountRows]: any = await conn.query('SELECT COUNT(*) as count FROM users');
-    if (userCountRows && userCountRows[0] && userCountRows[0].count === 0) {
-      const defaultAdminHash = bcrypt.hashSync('admin123', 10);
-      const defaultUserHash = bcrypt.hashSync('user123', 10);
-      await conn.query(`
-        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
-        VALUES 
-          ('usr_admin', 'admin', ?, 'Quản Trị Viên Hệ Thống', 'Quản trị viên', 'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', NOW()),
-          ('usr_nhanvien', 'nhanvien', ?, 'Nguyễn Văn Kho', 'Thủ kho', 'Tài khoản nhân viên vận hành kho', 'user', 'active', NOW());
-      `, [defaultAdminHash, defaultUserHash]);
-    }
-
-    await conn.end();
-
-    res.json({
-      success: true,
-      message: `Khởi tạo bảng MySQL thành công trong CSDL '${dbName}'!`,
-    });
-  } catch (err: any) {
-    if (conn) {
-      try { await conn.end(); } catch (_) { }
-    }
-    console.error('MySQL Init Tables Error:', err);
-    res.status(400).json({
-      success: false,
-      message: err.message || 'Không thể khởi tạo bảng trên MySQL',
-    });
-  }
-});
-
-// 3. Fetch All Data Endpoint
-app.post('/api/mysql/fetch-all', async (req, res) => {
-  let conn;
-  try {
-    const config = req.body;
-    conn = await getMySQLConnection(config, true);
-
-    const [itemsRows] = await conn.query('SELECT * FROM items ORDER BY updated_at DESC');
-    const [catsRows] = await conn.query('SELECT * FROM categories ORDER BY created_at ASC');
-    const [whsRows] = await conn.query('SELECT * FROM warehouses ORDER BY created_at ASC');
-    const [unitsRows] = await conn.query('SELECT * FROM units ORDER BY created_at ASC');
-    const [vouchersRows] = await conn.query('SELECT * FROM stock_vouchers ORDER BY created_at DESC');
-    const [voucherItemsRows] = await conn.query('SELECT * FROM stock_voucher_items');
-    const [logsRows] = await conn.query('SELECT * FROM inventory_logs ORDER BY created_at DESC');
-    let usersRows: any[] = [];
-    try {
-      const [uRows]: any = await conn.query('SELECT * FROM users');
-      usersRows = uRows || [];
-    } catch (err) {
-      console.error('Error fetching users from MySQL:', err);
-    }
-
-    await conn.end();
-
-    res.json({
-      success: true,
-      items: itemsRows,
-      categories: catsRows,
-      warehouses: whsRows,
-      units: unitsRows,
-      vouchers: vouchersRows,
-      voucherItems: voucherItemsRows,
-      logs: logsRows,
-      users: usersRows,
-    });
-  } catch (err: any) {
-    if (conn) {
-      try { await conn.end(); } catch (_) { }
-    }
-    console.error('MySQL Fetch All Error:', err);
-    res.status(400).json({
-      success: false,
-      message: err.message || 'Lỗi khi tải dữ liệu từ MySQL',
-    });
-  }
-});
-
-// 4. Save/Upsert Item
-app.post('/api/mysql/save-item', async (req, res) => {
-  let conn;
-  try {
-    const { config, item } = req.body;
-    conn = await getMySQLConnection(config, true);
-
-    const sql = `
-      INSERT INTO items (id, code, name, category_id, category_name, unit_id, unit_name, warehouse_id, warehouse_name, stock_quantity, min_stock_level, max_stock_level, note, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-      ON DUPLICATE KEY UPDATE
-        code = VALUES(code),
-        name = VALUES(name),
-        category_id = VALUES(category_id),
-        category_name = VALUES(category_name),
-        unit_id = VALUES(unit_id),
-        unit_name = VALUES(unit_name),
-        warehouse_id = VALUES(warehouse_id),
-        warehouse_name = VALUES(warehouse_name),
-        stock_quantity = VALUES(stock_quantity),
-        min_stock_level = VALUES(min_stock_level),
-        max_stock_level = VALUES(max_stock_level),
-        note = VALUES(note),
-        updated_at = NOW();
-    `;
-
-    await conn.execute(sql, [
-      item.id,
-      item.code,
-      item.name,
-      item.categoryId || '',
-      item.categoryName || '',
-      item.unitId || '',
-      item.unitName || '',
-      item.warehouseId || '',
-      item.warehouseName || '',
-      item.stockQuantity || 0,
-      item.minStockLevel || 0,
-      item.maxStockLevel || 100,
-      item.note || '',
-    ]);
-
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 5. Delete Item
-app.post('/api/mysql/delete-item', async (req, res) => {
-  let conn;
-  try {
-    const { config, id } = req.body;
-    conn = await getMySQLConnection(config, true);
-    await conn.execute('DELETE FROM items WHERE id = ?', [id]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 6. Save Warehouse
-app.post('/api/mysql/save-warehouse', async (req, res) => {
-  let conn;
-  try {
-    const { config, warehouse } = req.body;
-    conn = await getMySQLConnection(config, true);
-    const sql = `
-      INSERT INTO warehouses (id, code, name, location, manager, description, is_default, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
-      ON DUPLICATE KEY UPDATE
-        code = VALUES(code),
-        name = VALUES(name),
-        location = VALUES(location),
-        manager = VALUES(manager),
-        description = VALUES(description),
-        is_default = VALUES(is_default),
-        updated_at = NOW();
-    `;
-    await conn.execute(sql, [
-      warehouse.id,
-      warehouse.code,
-      warehouse.name,
-      warehouse.location || '',
-      warehouse.manager || '',
-      warehouse.description || '',
-      warehouse.isDefault ? 1 : 0,
-    ]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 7. Delete Warehouse
-app.post('/api/mysql/delete-warehouse', async (req, res) => {
-  let conn;
-  try {
-    const { config, id } = req.body;
-    conn = await getMySQLConnection(config, true);
-    await conn.execute('DELETE FROM warehouses WHERE id = ?', [id]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 8. Save Category
-app.post('/api/mysql/save-category', async (req, res) => {
-  let conn;
-  try {
-    const { config, category } = req.body;
-    conn = await getMySQLConnection(config, true);
-    const sql = `
-      INSERT INTO categories (id, code, name, description, updated_at)
-      VALUES (?, ?, ?, ?, NOW())
-      ON DUPLICATE KEY UPDATE
-        code = VALUES(code),
-        name = VALUES(name),
-        description = VALUES(description),
-        updated_at = NOW();
-    `;
-    await conn.execute(sql, [
-      category.id,
-      category.code,
-      category.name,
-      category.description || '',
-    ]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 9. Delete Category
-app.post('/api/mysql/delete-category', async (req, res) => {
-  let conn;
-  try {
-    const { config, id } = req.body;
-    conn = await getMySQLConnection(config, true);
-    await conn.execute('DELETE FROM categories WHERE id = ?', [id]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 10. Save Unit
-app.post('/api/mysql/save-unit', async (req, res) => {
-  let conn;
-  try {
-    const { config, unit } = req.body;
-    conn = await getMySQLConnection(config, true);
-    const sql = `
-      INSERT INTO units (id, name, description)
-      VALUES (?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        name = VALUES(name),
-        description = VALUES(description);
-    `;
-    await conn.execute(sql, [
-      unit.id,
-      unit.name,
-      unit.description || '',
-    ]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 11. Delete Unit
-app.post('/api/mysql/delete-unit', async (req, res) => {
-  let conn;
-  try {
-    const { config, id } = req.body;
-    conn = await getMySQLConnection(config, true);
-    await conn.execute('DELETE FROM units WHERE id = ?', [id]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 12. Save Voucher & Items & Logs
-app.post('/api/mysql/save-voucher', async (req, res) => {
-  let conn;
-  try {
-    const { config, voucher, logs, updatedItems } = req.body;
-    conn = await getMySQLConnection(config, true);
-
-    // Save stock_voucher
-    await conn.execute(`
-      INSERT INTO stock_vouchers (id, code, type, date, person, department, warehouse_id, warehouse_name, note, total_quantity)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        code = VALUES(code),
-        type = VALUES(type),
-        date = VALUES(date),
-        person = VALUES(person),
-        department = VALUES(department),
-        warehouse_id = VALUES(warehouse_id),
-        warehouse_name = VALUES(warehouse_name),
-        note = VALUES(note),
-        total_quantity = VALUES(total_quantity);
-    `, [
-      voucher.id,
-      voucher.code,
-      voucher.type,
-      voucher.date,
-      voucher.person || '',
-      voucher.department || '',
-      voucher.warehouseId || '',
-      voucher.warehouseName || '',
-      voucher.note || '',
-      voucher.totalQuantity || 0,
-    ]);
-
-    // Save line items
-    for (const vi of voucher.items || []) {
-      await conn.execute(`
-        INSERT INTO stock_voucher_items (voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
-        VALUES (?, ?, ?, ?, ?, ?, ?);
-      `, [
-        voucher.id,
-        vi.itemId,
-        vi.itemCode,
-        vi.itemName,
-        vi.unitName,
-        vi.quantity,
-        vi.currentStock,
-      ]);
-    }
-
-    // Save inventory_logs
-    for (const log of logs || []) {
-      await conn.execute(`
-        INSERT INTO inventory_logs (id, voucher_id, voucher_code, type, date, item_id, item_code, item_name, category_name, warehouse_id, warehouse_name, quantity, previous_stock, new_stock, person, department, note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          quantity = VALUES(quantity),
-          previous_stock = VALUES(previous_stock),
-          new_stock = VALUES(new_stock);
-      `, [
-        log.id,
-        log.voucherId,
-        log.voucherCode,
-        log.type,
-        log.date,
-        log.itemId,
-        log.itemCode,
-        log.itemName,
-        log.categoryName || '',
-        log.warehouseId || '',
-        log.warehouseName || '',
-        log.quantity || 0,
-        log.previousStock || 0,
-        log.newStock || 0,
-        log.person || '',
-        log.department || '',
-        log.note || '',
-      ]);
-    }
-
-    // Update Items
-    for (const item of updatedItems || []) {
-      await conn.execute(`
-        UPDATE items
-        SET stock_quantity = ?, updated_at = NOW()
-        WHERE id = ?;
-      `, [item.stockQuantity, item.id]);
-    }
-
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// 13. Delete Voucher (MySQL)
-app.post('/api/mysql/delete-voucher', async (req, res) => {
-  let conn;
-  try {
-    const { config, id, updatedItems } = req.body;
-    conn = await getMySQLConnection(config, true);
-
-    await conn.execute('DELETE FROM stock_voucher_items WHERE voucher_id = ?', [id]);
-    await conn.execute('DELETE FROM inventory_logs WHERE voucher_id = ?', [id]);
-    await conn.execute('DELETE FROM stock_vouchers WHERE id = ?', [id]);
-
-    for (const item of updatedItems || []) {
-      await conn.execute(`
-        UPDATE items
-        SET stock_quantity = ?, updated_at = NOW()
-        WHERE id = ?;
-      `, [item.stockQuantity, item.id]);
-    }
-
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
 // ==========================================
 // SQL SERVER (MSSQL) ENDPOINTS
 // ==========================================
@@ -1411,7 +637,7 @@ async function getMSSQLPool(config: any, includeDatabase = true) {
   const port = Number(config?.port || process.env.MSSQL_PORT || 1433);
   const user = config?.user || process.env.MSSQL_USER || 'antu';
   const password = config?.password !== undefined ? config.password : (process.env.MSSQL_PASSWORD || 'Ty2025@@');
-  const database = config?.database || process.env.MSSQL_DATABASE || 'inventory_db';
+  const database = config?.database || process.env.MSSQL_DATABASE || 'inventory_db_test';
   const encrypt = config?.encrypt === true;
 
   const mssqlConfig: mssql.config = {
@@ -1445,7 +671,7 @@ app.post('/api/mssql/test', async (req, res) => {
     pool = await getMSSQLPool(config, false);
     await pool.request().query('SELECT 1');
 
-    const dbName = sanitizeIdentifier(config?.database || 'inventory_db');
+    const dbName = sanitizeIdentifier(config?.database || 'inventory_db_test');
     if (dbName) {
       await pool.request().query(`
         IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = N'${dbName}')
@@ -1462,7 +688,7 @@ app.post('/api/mssql/test', async (req, res) => {
 
     res.json({
       success: true,
-      message: `Kết nối thành công tới SQL Server (${config.host || 'SERVER_LAN'}:${config.port || 1433}) - CSDL: ${config.database || 'inventory_db'}`,
+      message: `Kết nối thành công tới SQL Server (${config.host || 'SERVER_LAN'}:${config.port || 1433}) - CSDL: ${config.database || 'inventory_db_test'}`,
     });
   } catch (err: any) {
     if (pool) {
@@ -1482,7 +708,7 @@ app.post('/api/mssql/init-tables', async (req, res) => {
   let pool;
   try {
     const config = req.body;
-    const dbName = sanitizeIdentifier(config?.database || 'inventory_db');
+    const dbName = sanitizeIdentifier(config?.database || 'inventory_db_test');
     pool = await getMSSQLPool(config, false);
 
     await pool.request().query(`
@@ -1608,6 +834,46 @@ app.post('/api/mssql/init-tables', async (req, res) => {
         created_at DATETIME DEFAULT GETDATE(),
         updated_at DATETIME DEFAULT GETDATE()
       );
+
+      -- Ensure columns exist on pre-existing tables
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'warehouses') AND name = N'is_default')
+        ALTER TABLE warehouses ADD is_default BIT DEFAULT 0;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'items') AND name = N'min_stock_level')
+        ALTER TABLE items ADD min_stock_level INT DEFAULT 0;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'items') AND name = N'max_stock_level')
+        ALTER TABLE items ADD max_stock_level INT DEFAULT 100;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'items') AND name = N'note')
+        ALTER TABLE items ADD note NVARCHAR(MAX);
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'stock_vouchers') AND name = N'department')
+        ALTER TABLE stock_vouchers ADD department NVARCHAR(255);
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'stock_vouchers') AND name = N'note')
+        ALTER TABLE stock_vouchers ADD note NVARCHAR(MAX);
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'stock_vouchers') AND name = N'total_quantity')
+        ALTER TABLE stock_vouchers ADD total_quantity INT DEFAULT 0;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'stock_voucher_items') AND name = N'current_stock')
+        ALTER TABLE stock_voucher_items ADD current_stock INT DEFAULT 0;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'inventory_logs') AND name = N'department')
+        ALTER TABLE inventory_logs ADD department NVARCHAR(255);
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'inventory_logs') AND name = N'note')
+        ALTER TABLE inventory_logs ADD note NVARCHAR(MAX);
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password_hash')
+        ALTER TABLE users ADD password_hash NVARCHAR(255) NULL;
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'role')
+        ALTER TABLE users ADD role VARCHAR(20) DEFAULT 'user';
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'status')
+        ALTER TABLE users ADD status VARCHAR(20) DEFAULT 'active';
     `);
 
     // Seed default users if empty
@@ -1935,11 +1201,14 @@ app.post('/api/mssql/delete-unit', async (req, res) => {
 // 12. Save Voucher & Items & Logs SQL Server
 app.post('/api/mssql/save-voucher', async (req, res) => {
   let pool;
+  let transaction: mssql.Transaction | undefined;
   try {
     const { config, voucher, logs, updatedItems } = req.body;
     pool = await getMSSQLPool(config, true);
+    transaction = new mssql.Transaction(pool);
+    await transaction.begin();
 
-    const reqV = pool.request();
+    const reqV = new mssql.Request(transaction);
     reqV.input('id', mssql.VarChar(50), voucher.id);
     reqV.input('code', mssql.VarChar(50), voucher.code);
     reqV.input('type', mssql.VarChar(10), voucher.type);
@@ -1973,8 +1242,17 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
       END
     `);
 
+    // Replace existing voucher line items and logs for this voucher so updates never duplicate rows
+    const reqDelItems = new mssql.Request(transaction);
+    reqDelItems.input('voucher_id', mssql.VarChar(50), voucher.id);
+    await reqDelItems.query('DELETE FROM stock_voucher_items WHERE voucher_id = @voucher_id');
+
+    const reqDelLogs = new mssql.Request(transaction);
+    reqDelLogs.input('voucher_id', mssql.VarChar(50), voucher.id);
+    await reqDelLogs.query('DELETE FROM inventory_logs WHERE voucher_id = @voucher_id');
+
     for (const vi of voucher.items || []) {
-      const reqItem = pool.request();
+      const reqItem = new mssql.Request(transaction);
       reqItem.input('voucher_id', mssql.VarChar(50), voucher.id);
       reqItem.input('item_id', mssql.VarChar(50), vi.itemId);
       reqItem.input('item_code', mssql.VarChar(50), vi.itemCode || '');
@@ -1990,7 +1268,7 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
     }
 
     for (const log of logs || []) {
-      const reqLog = pool.request();
+      const reqLog = new mssql.Request(transaction);
       reqLog.input('id', mssql.VarChar(50), log.id);
       reqLog.input('voucher_id', mssql.VarChar(50), log.voucherId);
       reqLog.input('voucher_code', mssql.VarChar(50), log.voucherCode);
@@ -2027,7 +1305,7 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
     }
 
     for (const item of updatedItems || []) {
-      const reqStock = pool.request();
+      const reqStock = new mssql.Request(transaction);
       reqStock.input('id', mssql.VarChar(50), item.id);
       reqStock.input('stock_quantity', mssql.Int, item.stockQuantity || 0);
 
@@ -2038,10 +1316,67 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
       `);
     }
 
+    await transaction.commit();
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
+    if (transaction) { try { await transaction.rollback(); } catch (_) { } }
     if (pool) { try { await pool.close(); } catch (_) { } }
+    console.error('SQL Server Save Voucher Error:', err);
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 13. Auto-repair: Insert missing stock_voucher_items reconstructed from inventory_logs
+app.post('/api/mssql/repair-voucher-items', async (req, res) => {
+  let pool;
+  try {
+    const { config, voucherId, items } = req.body;
+    if (!voucherId || !items || items.length === 0) {
+      return res.json({ success: true, inserted: 0 });
+    }
+
+    pool = await getMSSQLPool(config, true);
+
+    // Only insert if this voucher truly has no items yet (safe guard)
+    const checkReq = pool.request();
+    checkReq.input('voucher_id', mssql.VarChar(50), voucherId);
+    const checkRes = await checkReq.query(
+      'SELECT COUNT(*) as cnt FROM stock_voucher_items WHERE voucher_id = @voucher_id'
+    );
+    const existingCount = Number(checkRes.recordset?.[0]?.cnt || 0);
+
+    if (existingCount > 0) {
+      await pool.close();
+      return res.json({ success: true, inserted: 0, skipped: true });
+    }
+
+    let inserted = 0;
+    for (const vi of items) {
+      const reqItem = pool.request();
+      reqItem.input('voucher_id', mssql.VarChar(50), voucherId);
+      reqItem.input('item_id', mssql.VarChar(50), vi.itemId || '');
+      reqItem.input('item_code', mssql.VarChar(50), vi.itemCode || '');
+      reqItem.input('item_name', mssql.NVarChar(255), vi.itemName || '');
+      reqItem.input('unit_name', mssql.NVarChar(255), vi.unitName || '');
+      reqItem.input('quantity', mssql.Int, Number(vi.quantity) || 0);
+      reqItem.input('current_stock', mssql.Int, Number(vi.currentStock) || 0);
+
+      await reqItem.query(`
+        INSERT INTO stock_voucher_items
+          (voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
+        VALUES
+          (@voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock)
+      `);
+      inserted++;
+    }
+
+    await pool.close();
+    console.log(`[repair-voucher-items] Voucher ${voucherId}: inserted ${inserted} item(s).`);
+    res.json({ success: true, inserted });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) { } }
+    console.error('SQL Server Repair Voucher Items Error:', err);
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -2049,24 +1384,27 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
 // Delete Voucher (MSSQL)
 app.post('/api/mssql/delete-voucher', async (req, res) => {
   let pool;
+  let transaction: mssql.Transaction | undefined;
   try {
     const { config, id, updatedItems } = req.body;
     pool = await getMSSQLPool(config, true);
+    transaction = new mssql.Transaction(pool);
+    await transaction.begin();
 
-    const reqDelItems = pool.request();
+    const reqDelItems = new mssql.Request(transaction);
     reqDelItems.input('voucher_id', mssql.VarChar(50), id);
     await reqDelItems.query('DELETE FROM stock_voucher_items WHERE voucher_id = @voucher_id');
 
-    const reqDelLogs = pool.request();
+    const reqDelLogs = new mssql.Request(transaction);
     reqDelLogs.input('voucher_id', mssql.VarChar(50), id);
     await reqDelLogs.query('DELETE FROM inventory_logs WHERE voucher_id = @voucher_id');
 
-    const reqDelVoucher = pool.request();
+    const reqDelVoucher = new mssql.Request(transaction);
     reqDelVoucher.input('id', mssql.VarChar(50), id);
     await reqDelVoucher.query('DELETE FROM stock_vouchers WHERE id = @id');
 
     for (const item of updatedItems || []) {
-      const reqStock = pool.request();
+      const reqStock = new mssql.Request(transaction);
       reqStock.input('id', mssql.VarChar(50), item.id);
       reqStock.input('stock_quantity', mssql.Int, item.stockQuantity || 0);
       await reqStock.query(`
@@ -2076,89 +1414,13 @@ app.post('/api/mssql/delete-voucher', async (req, res) => {
       `);
     }
 
+    await transaction.commit();
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
+    if (transaction) { try { await transaction.rollback(); } catch (_) { } }
     if (pool) { try { await pool.close(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// Save User (MySQL)
-app.post('/api/mysql/save-user', async (req, res) => {
-  let conn;
-  try {
-    const { config, user, passwordHash } = req.body;
-    conn = await getMySQLConnection(config, true);
-
-    const rawPass = passwordHash || user?.passwordHash || user?.password;
-    if (rawPass) {
-      const encryptedHash = hashPasswordIfNeeded(rawPass);
-      const sql = `
-        INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE
-          username = VALUES(username),
-          password_hash = VALUES(password_hash),
-          full_name = VALUES(full_name),
-          position = VALUES(position),
-          notes = VALUES(notes),
-          role = VALUES(role),
-          status = VALUES(status),
-          updated_at = NOW();
-      `;
-      await conn.execute(sql, [
-        user.id,
-        user.username.toLowerCase(),
-        encryptedHash,
-        user.fullName,
-        user.position || '',
-        user.notes || '',
-        user.role || 'user',
-        user.status || 'active',
-      ]);
-    } else {
-      const sql = `
-        INSERT INTO users (id, username, full_name, position, notes, role, status, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE
-          full_name = VALUES(full_name),
-          position = VALUES(position),
-          notes = VALUES(notes),
-          role = VALUES(role),
-          status = VALUES(status),
-          updated_at = NOW();
-      `;
-      await conn.execute(sql, [
-        user.id,
-        user.username.toLowerCase(),
-        user.fullName,
-        user.position || '',
-        user.notes || '',
-        user.role || 'user',
-        user.status || 'active',
-      ]);
-    }
-
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// Delete User (MySQL)
-app.post('/api/mysql/delete-user', async (req, res) => {
-  let conn;
-  try {
-    const { config, id } = req.body;
-    conn = await getMySQLConnection(config, true);
-    await conn.execute('DELETE FROM users WHERE id = ?', [id]);
-    await conn.end();
-    res.json({ success: true });
-  } catch (err: any) {
-    if (conn) { try { await conn.end(); } catch (_) { } }
+    console.error('SQL Server Delete Voucher Error:', err);
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -2267,7 +1529,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
