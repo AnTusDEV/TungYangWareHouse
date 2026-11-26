@@ -40,9 +40,8 @@ export function StockOutManager() {
   // Form State
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [person, setPerson] = useState<string>(currentUserName);
-  const [department, setDepartment] = useState<string>('');
-  const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || '');
-  const [note, setNote] = useState<string>('');
+  const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || 'wh-1');
+  const [note, setNote] = useState<string>('Cấp phát văn phòng phẩm định kỳ');
 
   // Line Items State
   const [lineItems, setLineItems] = useState<{ itemId: string; quantity: number }[]>([
@@ -54,9 +53,8 @@ export function StockOutManager() {
     setAlertInfo(null);
     setDate(new Date().toISOString().split('T')[0]);
     setPerson(currentUserName);
-    setDepartment('');
-    setWarehouseId(warehouses[0]?.id || '');
-    setNote('');
+    setWarehouseId(warehouses[0]?.id || 'wh-1');
+    setNote('Cấp phát văn phòng phẩm');
 
     // Filter items with stock > 0
     const availableItem = items.find((i) => i.stockQuantity > 0) || items[0];
@@ -111,7 +109,6 @@ export function StockOutManager() {
     const res = createStockOutVoucher({
       date,
       person,
-      department: department.trim() || undefined,
       warehouseId,
       note,
       items: lineItems,
@@ -148,14 +145,9 @@ export function StockOutManager() {
     },
     {
       key: 'person',
-      header: 'Người Lập & Bộ Phận Nhận',
+      header: 'Người Nhận',
       sortable: true,
-      render: (v) => (
-        <div>
-          <span className="font-semibold text-slate-900 dark:text-slate-100">{v.person}</span>
-          {v.department && <div className="text-[11px] text-rose-600 dark:text-rose-400">{v.department}</div>}
-        </div>
-      ),
+      render: (v) => <span className="font-semibold text-slate-900 dark:text-slate-100">{v.person}</span>,
     },
     {
       key: 'warehouseName',
@@ -238,8 +230,8 @@ export function StockOutManager() {
         data={outboundVouchers}
         columns={columns}
         rowKey={(v) => v.id}
-        searchKey={(v) => `${v.code} ${v.person} ${v.department || ''} ${v.warehouseName} ${v.note}`}
-        searchPlaceholder="Tìm kiếm số phiếu, người nhận, bộ phận..."
+        searchKey={(v) => `${v.code} ${v.person} ${v.warehouseName} ${v.note}`}
+        searchPlaceholder="Tìm kiếm số phiếu, người nhận..."
         onRowClick={(v) => setViewingVoucher(v)}
       />
 
@@ -288,7 +280,7 @@ export function StockOutManager() {
           )}
 
           {/* Header Info */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Ngày Xuất
@@ -314,30 +306,6 @@ export function StockOutManager() {
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-not-allowed opacity-90"
                 title="Tài khoản đăng nhập hiện tại (không thể chỉnh sửa)"
               />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Bộ Phận Nhận <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                list="stock-out-departments"
-                value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                placeholder="VD: Phòng Hành chính, Kỹ thuật..."
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-rose-500 focus:outline-none"
-              />
-              <datalist id="stock-out-departments">
-                <option value="Phòng Hành chính Nhân sự" />
-                <option value="Phòng Kế toán" />
-                <option value="Phòng Kỹ thuật Công nghệ" />
-                <option value="Phòng Kinh doanh" />
-                <option value="Xưởng Sản xuất" />
-                <option value="Bộ phận Kho" />
-                <option value="Ban Giám đốc" />
-              </datalist>
             </div>
 
             <div>
@@ -532,21 +500,21 @@ export function StockOutManager() {
                       viewingVoucher.items.length > 0
                         ? viewingVoucher.items
                         : logs
-                            .filter(
-                              (l) =>
-                                l.voucherId === viewingVoucher.id ||
-                                (viewingVoucher.code && l.voucherCode === viewingVoucher.code)
-                            )
-                            .map((l) => {
-                              const matchedItem = items.find((i) => i.id === l.itemId || i.code === l.itemCode);
-                              return {
-                                itemId: l.itemId,
-                                itemCode: l.itemCode,
-                                itemName: l.itemName,
-                                unitName: matchedItem?.unitName || '-',
-                                quantity: l.quantity,
-                              };
-                            });
+                          .filter(
+                            (l) =>
+                              l.voucherId === viewingVoucher.id ||
+                              (viewingVoucher.code && l.voucherCode === viewingVoucher.code)
+                          )
+                          .map((l) => {
+                            const matchedItem = items.find((i) => i.id === l.itemId || i.code === l.itemCode);
+                            return {
+                              itemId: l.itemId,
+                              itemCode: l.itemCode,
+                              itemName: l.itemName,
+                              unitName: matchedItem?.unitName || '-',
+                              quantity: l.quantity,
+                            };
+                          });
 
                     if (detailItems.length === 0) {
                       return (
