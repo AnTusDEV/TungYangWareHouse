@@ -45,6 +45,7 @@ export function StockOutManager() {
   const departments = [
     'Sếp + Trợ lý',
     'Bảo vệ',
+    'Nhân sự',
     'REICH',
     'HCNS',
     'Kế toán',

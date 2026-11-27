@@ -52,7 +52,36 @@ function mapDbRowToUser(row: any): ServerUser {
   };
 }
 
+// In-memory fallback users when external SQL Server is unreachable (e.g. cloud preview)
+const fallbackUsers: ServerUser[] = [
+  {
+    id: 'usr_admin',
+    username: 'admin',
+    passwordHash: bcrypt.hashSync('admin123', 10),
+    fullName: 'Quản Trị Viên Hệ Thống',
+    position: 'Quản trị viên',
+    notes: 'Tài khoản quản trị cao nhất hệ thống',
+    role: 'admin',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'usr_nhanvien',
+    username: 'nhanvien',
+    passwordHash: bcrypt.hashSync('user123', 10),
+    fullName: 'Nguyễn Văn Kho',
+    position: 'Thủ kho',
+    notes: 'Tài khoản nhân viên vận hành kho',
+    role: 'user',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  },
+];
+
 async function getDbClient(): Promise<mssql.ConnectionPool | null> {
+  if (!process.env.MSSQL_HOST) {
+    return null;
+  }
   try {
     const pool = await getMSSQLPool({}, true);
     if (pool) return pool;
@@ -109,11 +138,13 @@ async function ensureUsersTable(pool: mssql.ConnectionPool) {
 }
 
 async function findUserByUsernameFromDb(username: string): Promise<ServerUser | null> {
+  const cleanUsername = username.trim().toLowerCase();
   const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
+  if (!pool) {
+    return fallbackUsers.find((u) => u.username.toLowerCase() === cleanUsername) || null;
+  }
 
   await ensureUsersTable(pool);
-  const cleanUsername = username.trim().toLowerCase();
 
   try {
     const req = pool.request();
@@ -130,7 +161,9 @@ async function findUserByUsernameFromDb(username: string): Promise<ServerUser | 
 
 async function findUserByIdFromDb(userId: string): Promise<ServerUser | null> {
   const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
+  if (!pool) {
+    return fallbackUsers.find((u) => u.id === userId) || null;
+  }
 
   await ensureUsersTable(pool);
 
@@ -149,7 +182,9 @@ async function findUserByIdFromDb(userId: string): Promise<ServerUser | null> {
 
 async function getAllUsersFromDb(): Promise<ServerUser[]> {
   const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
+  if (!pool) {
+    return [...fallbackUsers];
+  }
 
   await ensureUsersTable(pool);
 
@@ -174,14 +209,44 @@ async function saveUserToDb(user: {
   passwordHash?: string;
   password?: string;
 }): Promise<void> {
-  const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
-
-  await ensureUsersTable(pool);
-
   const cleanUsername = user.username.trim().toLowerCase();
   const rawPass = user.passwordHash || user.password;
   const hashToUse = rawPass ? hashPasswordIfNeeded(rawPass) : undefined;
+
+  const pool = await getDbClient();
+  if (!pool) {
+    const idx = fallbackUsers.findIndex((u) => u.id === user.id);
+    const now = new Date().toISOString();
+    if (idx !== -1) {
+      fallbackUsers[idx] = {
+        ...fallbackUsers[idx],
+        username: cleanUsername,
+        fullName: user.fullName,
+        position: user.position || '',
+        notes: user.notes || '',
+        role: user.role || fallbackUsers[idx].role,
+        status: user.status || fallbackUsers[idx].status,
+        ...(hashToUse ? { passwordHash: hashToUse } : {}),
+        updatedAt: now,
+      };
+    } else {
+      fallbackUsers.push({
+        id: user.id,
+        username: cleanUsername,
+        passwordHash: hashToUse || bcrypt.hashSync('12345678', 10),
+        fullName: user.fullName,
+        position: user.position || '',
+        notes: user.notes || '',
+        role: user.role || 'user',
+        status: user.status || 'active',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    return;
+  }
+
+  await ensureUsersTable(pool);
 
   try {
     const req = pool.request();
@@ -245,7 +310,11 @@ async function saveUserToDb(user: {
 
 async function deleteUserFromDb(userId: string): Promise<void> {
   const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
+  if (!pool) {
+    const idx = fallbackUsers.findIndex((u) => u.id === userId);
+    if (idx !== -1) fallbackUsers.splice(idx, 1);
+    return;
+  }
 
   await ensureUsersTable(pool);
 
@@ -261,11 +330,18 @@ async function deleteUserFromDb(userId: string): Promise<void> {
 }
 
 async function updateUserPasswordInDb(userId: string, newPasswordPlain: string): Promise<void> {
+  const passwordHash = hashPasswordIfNeeded(newPasswordPlain);
   const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
+  if (!pool) {
+    const user = fallbackUsers.find((u) => u.id === userId);
+    if (user) {
+      user.passwordHash = passwordHash;
+      user.updatedAt = new Date().toISOString();
+    }
+    return;
+  }
 
   await ensureUsersTable(pool);
-  const passwordHash = hashPasswordIfNeeded(newPasswordPlain);
 
   try {
     const req = pool.request();
@@ -281,7 +357,14 @@ async function updateUserPasswordInDb(userId: string, newPasswordPlain: string):
 
 async function updateUserStatusInDb(userId: string, status: 'active' | 'locked'): Promise<void> {
   const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
+  if (!pool) {
+    const user = fallbackUsers.find((u) => u.id === userId);
+    if (user) {
+      user.status = status;
+      user.updatedAt = new Date().toISOString();
+    }
+    return;
+  }
 
   await ensureUsersTable(pool);
 
@@ -299,7 +382,17 @@ async function updateUserStatusInDb(userId: string, status: 'active' | 'locked')
 
 async function updateUserProfileInDb(userId: string, data: { fullName?: string; position?: string; notes?: string; role?: 'admin' | 'user' }): Promise<void> {
   const pool = await getDbClient();
-  if (!pool) throw new Error('Không thể kết nối tới cơ sở dữ liệu SQL Server');
+  if (!pool) {
+    const user = fallbackUsers.find((u) => u.id === userId);
+    if (user) {
+      if (data.fullName !== undefined) user.fullName = data.fullName;
+      if (data.position !== undefined) user.position = data.position;
+      if (data.notes !== undefined) user.notes = data.notes;
+      if (data.role !== undefined) user.role = data.role;
+      user.updatedAt = new Date().toISOString();
+    }
+    return;
+  }
 
   await ensureUsersTable(pool);
 
@@ -636,7 +729,7 @@ async function getMSSQLPool(config: any, includeDatabase = true) {
   const host = config?.host || process.env.MSSQL_HOST || 'SERVER_LAN';
   const port = Number(config?.port || process.env.MSSQL_PORT || 1433);
   const user = config?.user || process.env.MSSQL_USER || 'antu';
-  const password = config?.password !== undefined ? config.password : (process.env.MSSQL_PASSWORD || 'Ty2025@@');
+  const password = config?.password !== undefined ? config.password : (process.env.MSSQL_PASSWORD || '');
   const database = config?.database || process.env.MSSQL_DATABASE || 'inventory_db_test';
   const encrypt = config?.encrypt === true;
 
@@ -650,7 +743,7 @@ async function getMSSQLPool(config: any, includeDatabase = true) {
       trustServerCertificate: true,
       enableArithAbort: true,
     },
-    connectionTimeout: 10000,
+    connectionTimeout: 3000,
     requestTimeout: 15000,
   };
 
@@ -821,6 +914,19 @@ app.post('/api/mssql/init-tables', async (req, res) => {
         created_at DATETIME DEFAULT GETDATE()
       );
 
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'departments')
+      CREATE TABLE departments (
+        id VARCHAR(50) PRIMARY KEY,
+        code VARCHAR(50) NOT NULL,
+        name NVARCHAR(255) NOT NULL,
+        manager NVARCHAR(255),
+        phone VARCHAR(50),
+        description NVARCHAR(MAX),
+        status VARCHAR(20) DEFAULT 'active',
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE()
+      );
+
       IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'users')
       CREATE TABLE users (
         id VARCHAR(50) PRIMARY KEY,
@@ -874,6 +980,12 @@ app.post('/api/mssql/init-tables', async (req, res) => {
 
       IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'status')
         ALTER TABLE users ADD status VARCHAR(20) DEFAULT 'active';
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'departments') AND name = N'phone')
+        ALTER TABLE departments ADD phone VARCHAR(50);
+
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'departments') AND name = N'status')
+        ALTER TABLE departments ADD status VARCHAR(20) DEFAULT 'active';
     `);
 
     // Seed default users if empty
@@ -924,6 +1036,17 @@ app.post('/api/mssql/fetch-all', async (req, res) => {
     const vouchersRes = await pool.request().query('SELECT * FROM stock_vouchers ORDER BY created_at DESC');
     const voucherItemsRes = await pool.request().query('SELECT * FROM stock_voucher_items');
     const logsRes = await pool.request().query('SELECT * FROM inventory_logs ORDER BY created_at DESC');
+    let departmentsRecordset: any[] = [];
+    try {
+      const deptsRes = await pool.request().query(`
+        IF EXISTS (SELECT * FROM sys.tables WHERE name = N'departments')
+          SELECT * FROM departments ORDER BY created_at ASC
+      `);
+      departmentsRecordset = deptsRes.recordset || [];
+    } catch (err) {
+      console.error('Error fetching departments from MSSQL:', err);
+    }
+
     let usersRecordset: any[] = [];
     try {
       const usersRes = await pool.request().query('SELECT * FROM users');
@@ -940,6 +1063,7 @@ app.post('/api/mssql/fetch-all', async (req, res) => {
       categories: catsRes.recordset,
       warehouses: whsRes.recordset,
       units: unitsRes.recordset,
+      departments: departmentsRecordset,
       vouchers: vouchersRes.recordset,
       voucherItems: voucherItemsRes.recordset,
       logs: logsRes.recordset,
@@ -1198,6 +1322,163 @@ app.post('/api/mssql/delete-unit', async (req, res) => {
   }
 });
 
+// 11b. Save Department SQL Server
+app.post('/api/mssql/save-department', async (req, res) => {
+  let pool;
+  try {
+    const { config, department } = req.body;
+    if (!department || !department.id || !department.code || !department.name) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin phòng ban bắt buộc (id, mã, tên)' });
+    }
+    pool = await getMSSQLPool(config, true);
+
+    await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'departments')
+      CREATE TABLE departments (
+        id VARCHAR(50) PRIMARY KEY,
+        code VARCHAR(50) NOT NULL,
+        name NVARCHAR(255) NOT NULL,
+        manager NVARCHAR(255),
+        phone VARCHAR(50),
+        description NVARCHAR(MAX),
+        status VARCHAR(20) DEFAULT 'active',
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE()
+      );
+    `);
+
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), String(department.id));
+    request.input('code', mssql.VarChar(50), String(department.code).trim());
+    request.input('name', mssql.NVarChar(255), String(department.name).trim());
+    request.input('manager', mssql.NVarChar(255), String(department.manager || '').trim());
+    request.input('phone', mssql.VarChar(50), String(department.phone || '').trim());
+    request.input('description', mssql.NVarChar(mssql.MAX), String(department.description || '').trim());
+    request.input('status', mssql.VarChar(20), department.status === 'inactive' ? 'inactive' : 'active');
+
+    await request.query(`
+      IF EXISTS (SELECT 1 FROM departments WHERE id = @id)
+      BEGIN
+        UPDATE departments SET
+          code = @code,
+          name = @name,
+          manager = @manager,
+          phone = @phone,
+          description = @description,
+          status = @status,
+          updated_at = GETDATE()
+        WHERE id = @id;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO departments (id, code, name, manager, phone, description, status, created_at, updated_at)
+        VALUES (@id, @code, @name, @manager, @phone, @description, @status, GETDATE(), GETDATE());
+      END
+    `);
+
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) { } }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 11c. Delete Department SQL Server
+app.post('/api/mssql/delete-department', async (req, res) => {
+  let pool;
+  try {
+    const { config, id } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Thiếu mã ID phòng ban' });
+    }
+    pool = await getMSSQLPool(config, true);
+    const request = pool.request();
+    request.input('id', mssql.VarChar(50), String(id));
+    await request.query(`
+      IF EXISTS (SELECT * FROM sys.tables WHERE name = N'departments')
+        DELETE FROM departments WHERE id = @id
+    `);
+    await pool.close();
+    res.json({ success: true });
+  } catch (err: any) {
+    if (pool) { try { await pool.close(); } catch (_) { } }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+async function insertStockVoucherItems(
+  target: mssql.ConnectionPool | mssql.Transaction,
+  voucherId: string,
+  items: any[]
+): Promise<number> {
+  if (!items || items.length === 0) return 0;
+
+  const createReq = () =>
+    target instanceof mssql.Transaction ? new mssql.Request(target) : target.request();
+
+  const metaRes = await createReq().query(`
+    SELECT c.is_identity, t.name AS type_name
+    FROM sys.columns c
+    JOIN sys.types t ON c.user_type_id = t.user_type_id
+    WHERE c.object_id = OBJECT_ID(N'stock_voucher_items') AND c.name = N'id'
+  `);
+  const idMeta = metaRes.recordset?.[0];
+  const hasId = Boolean(idMeta);
+  const isIdentity = Boolean(idMeta?.is_identity);
+  const typeName = String(idMeta?.type_name || '').toLowerCase();
+  const isNumericId = ['int', 'bigint', 'smallint', 'tinyint'].includes(typeName);
+
+  let nextNumericId = 1;
+  if (hasId && !isIdentity && isNumericId) {
+    const maxRes = await createReq().query(
+      'SELECT ISNULL(MAX(TRY_CAST(id AS BIGINT)), 0) AS maxId FROM stock_voucher_items'
+    );
+    nextNumericId = Number(maxRes.recordset?.[0]?.maxId || 0) + 1;
+  }
+
+  let inserted = 0;
+  for (let i = 0; i < items.length; i++) {
+    const vi = items[i];
+    const reqItem = createReq();
+    reqItem.input('voucher_id', mssql.VarChar(50), voucherId);
+    reqItem.input('item_id', mssql.VarChar(50), vi.itemId || '');
+    reqItem.input('item_code', mssql.VarChar(50), vi.itemCode || '');
+    reqItem.input('item_name', mssql.NVarChar(255), vi.itemName || '');
+    reqItem.input('unit_name', mssql.NVarChar(255), vi.unitName || '');
+    reqItem.input('quantity', mssql.Int, Number(vi.quantity) || 0);
+    reqItem.input('current_stock', mssql.Int, Number(vi.currentStock) || 0);
+
+    if (!hasId || isIdentity) {
+      await reqItem.query(`
+        INSERT INTO stock_voucher_items (voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
+        VALUES (@voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+      `);
+    } else if (typeName === 'uniqueidentifier') {
+      await reqItem.query(`
+        INSERT INTO stock_voucher_items (id, voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
+        VALUES (NEWID(), @voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+      `);
+    } else if (isNumericId) {
+      reqItem.input('id', mssql.BigInt, nextNumericId++);
+      await reqItem.query(`
+        INSERT INTO stock_voucher_items (id, voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
+        VALUES (@id, @voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+      `);
+    } else {
+      const strId = `svi_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`;
+      reqItem.input('id', mssql.VarChar(50), strId);
+      await reqItem.query(`
+        INSERT INTO stock_voucher_items (id, voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
+        VALUES (@id, @voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+      `);
+    }
+    inserted++;
+  }
+
+  return inserted;
+}
+
 // 12. Save Voucher & Items & Logs SQL Server
 app.post('/api/mssql/save-voucher', async (req, res) => {
   let pool;
@@ -1251,21 +1532,7 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
     reqDelLogs.input('voucher_id', mssql.VarChar(50), voucher.id);
     await reqDelLogs.query('DELETE FROM inventory_logs WHERE voucher_id = @voucher_id');
 
-    for (const vi of voucher.items || []) {
-      const reqItem = new mssql.Request(transaction);
-      reqItem.input('voucher_id', mssql.VarChar(50), voucher.id);
-      reqItem.input('item_id', mssql.VarChar(50), vi.itemId);
-      reqItem.input('item_code', mssql.VarChar(50), vi.itemCode || '');
-      reqItem.input('item_name', mssql.NVarChar(255), vi.itemName || '');
-      reqItem.input('unit_name', mssql.NVarChar(255), vi.unitName || '');
-      reqItem.input('quantity', mssql.Int, vi.quantity || 0);
-      reqItem.input('current_stock', mssql.Int, vi.currentStock || 0);
-
-      await reqItem.query(`
-        INSERT INTO stock_voucher_items (voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
-        VALUES (@voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
-      `);
-    }
+    await insertStockVoucherItems(transaction, voucher.id, voucher.items || []);
 
     for (const log of logs || []) {
       const reqLog = new mssql.Request(transaction);
@@ -1351,25 +1618,7 @@ app.post('/api/mssql/repair-voucher-items', async (req, res) => {
       return res.json({ success: true, inserted: 0, skipped: true });
     }
 
-    let inserted = 0;
-    for (const vi of items) {
-      const reqItem = pool.request();
-      reqItem.input('voucher_id', mssql.VarChar(50), voucherId);
-      reqItem.input('item_id', mssql.VarChar(50), vi.itemId || '');
-      reqItem.input('item_code', mssql.VarChar(50), vi.itemCode || '');
-      reqItem.input('item_name', mssql.NVarChar(255), vi.itemName || '');
-      reqItem.input('unit_name', mssql.NVarChar(255), vi.unitName || '');
-      reqItem.input('quantity', mssql.Int, Number(vi.quantity) || 0);
-      reqItem.input('current_stock', mssql.Int, Number(vi.currentStock) || 0);
-
-      await reqItem.query(`
-        INSERT INTO stock_voucher_items
-          (voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
-        VALUES
-          (@voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock)
-      `);
-      inserted++;
-    }
+    const inserted = await insertStockVoucherItems(pool, voucherId, items);
 
     await pool.close();
     console.log(`[repair-voucher-items] Voucher ${voucherId}: inserted ${inserted} item(s).`);
