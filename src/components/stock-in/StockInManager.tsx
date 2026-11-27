@@ -79,6 +79,34 @@ export function StockInManager() {
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [person, setPerson] = useState<string>(currentUserName);
   const [department, setDepartment] = useState<string>('');
+  const [showDepartmentList, setShowDepartmentList] = useState<boolean>(false);
+  const departments = [
+    'Sếp + Trợ lý',
+    'Bảo vệ',
+    'REICH',
+    'HCNS',
+    'Kế toán',
+    'Kinh doanh',
+    'Kế hoạch',
+    'Tạp vụ',
+    'Tạp vụ văn phòng',
+    'Nấu ăn',
+    'Lò luyện',
+    'Định hình',
+    'Khuôn',
+    'MARK',
+    'Xi mạ',
+    'Sơn TĐ',
+    'KCS',
+    'Kho TP 1',
+    'Kho TP 2',
+    'Kho thô',
+    'Gia công',
+    'Bảo dưỡng',
+  ];
+  const filteredDepartments = departments.filter((item) =>
+    item.toLowerCase().includes(department.trim().toLowerCase())
+  );
   const [warehouseId, setWarehouseId] = useState<string>(warehouses[0]?.id || '');
   const [note, setNote] = useState<string>('');
 
@@ -494,32 +522,54 @@ export function StockInManager() {
               />
             </div>
 
-            <div>
+            <div className="relative">
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Bộ Phận Nhận / Phòng Ban
               </label>
               <input
-                type="text"
-                list="stock-in-departments"
+                type="search"
                 value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                placeholder="VD: Phòng Hành chính, Kỹ thuật..."
+                onChange={(e) => {
+                  setDepartment(e.target.value);
+                  setShowDepartmentList(true);
+                }}
+                onFocus={() => setShowDepartmentList(true)}
+                onBlur={() => {
+                  setTimeout(() => setShowDepartmentList(false), 150);
+                }}
+                placeholder="Nhập tên phòng ban để tìm kiếm..."
+                autoComplete="off"
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-emerald-500 focus:outline-none"
               />
-              <datalist id="stock-in-departments">
-                <option value="Phòng Hành chính Nhân sự" />
-                <option value="Phòng Kế toán" />
-                <option value="Phòng Kỹ thuật Công nghệ" />
-                <option value="Phòng Kinh doanh" />
-                <option value="Xưởng Sản xuất" />
-                <option value="Bộ phận Kho" />
-                <option value="Ban Giám đốc" />
-              </datalist>
+              {showDepartmentList && (
+                <div className="absolute z-50 mt-1 w-full max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg">
+                  {filteredDepartments.length > 0 ? (
+                    filteredDepartments.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setDepartment(item);
+                          setShowDepartmentList(false);
+                        }}
+                        className="w-full px-3 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-slate-800"
+                      >
+                        {item}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2 text-xs text-slate-400">
+                      Không tìm thấy phòng ban
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Kho Nhập Hàng
+                Nhập vào kho
               </label>
               <select
                 value={warehouseId}
@@ -741,21 +791,21 @@ export function StockInManager() {
                       viewingVoucher.items.length > 0
                         ? viewingVoucher.items
                         : logs
-                            .filter(
-                              (l) =>
-                                l.voucherId === viewingVoucher.id ||
-                                (viewingVoucher.code && l.voucherCode === viewingVoucher.code)
-                            )
-                            .map((l) => {
-                              const matchedItem = items.find((i) => i.id === l.itemId || i.code === l.itemCode);
-                              return {
-                                itemId: l.itemId,
-                                itemCode: l.itemCode,
-                                itemName: l.itemName,
-                                unitName: matchedItem?.unitName || '-',
-                                quantity: l.quantity,
-                              };
-                            });
+                          .filter(
+                            (l) =>
+                              l.voucherId === viewingVoucher.id ||
+                              (viewingVoucher.code && l.voucherCode === viewingVoucher.code)
+                          )
+                          .map((l) => {
+                            const matchedItem = items.find((i) => i.id === l.itemId || i.code === l.itemCode);
+                            return {
+                              itemId: l.itemId,
+                              itemCode: l.itemCode,
+                              itemName: l.itemName,
+                              unitName: matchedItem?.unitName || '-',
+                              quantity: l.quantity,
+                            };
+                          });
 
                     if (detailItems.length === 0) {
                       return (
