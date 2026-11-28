@@ -225,7 +225,7 @@ export const useInventoryStore = create<InventoryState>()(
     (set, get) => ({
       activeTab: 'dashboard',
       setActiveTab: (tab) => set({ activeTab: tab }),
-      theme: 'dark',
+      theme: 'light',
       toggleTheme: () => set((state) => ({ theme: state.theme === 'dark' ? 'light' : 'dark' })),
       searchTerm: '',
       setSearchTerm: (term) => set({ searchTerm: term }),
@@ -1107,6 +1107,13 @@ export const useInventoryStore = create<InventoryState>()(
     }),
     {
       name: 'erp-mini-inventory-storage',
+      version: 2,
+      migrate: (persistedState: any, version: number) => {
+        if (version < 2 && persistedState && typeof persistedState === 'object') {
+          return { ...persistedState, theme: 'light' };
+        }
+        return persistedState;
+      },
       partialize: (state) => ({
         theme: state.theme,
         warehouses: state.warehouses,

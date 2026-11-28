@@ -17,6 +17,8 @@ import {
   LogOut,
   ChevronDown,
   Users,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -44,6 +46,8 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
     searchTerm,
     setSearchTerm,
     items,
+    theme,
+    toggleTheme,
   } = useInventoryStore();
 
   const { currentUser, logout } = useAuthStore();
@@ -101,6 +105,7 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
     'stock-out': { title: 'Phiếu Xuất Kho', subtitle: 'Tạo phiếu xuất cấp phát & tự động trừ tồn kho' },
     'stock-lookup': { title: 'Tra Cứu Tồn Kho', subtitle: 'Kiểm tra nhanh số lượng tồn, lọc vị trí kho & cảnh báo' },
     history: { title: 'Lịch Sử Nhập Xuất', subtitle: 'Theo dõi toàn bộ biến động kho chi tiết theo thời gian' },
+    statistics: { title: 'Thống Kê Cấp Phát', subtitle: 'Thống kê sản phẩm đã cấp phát theo bộ phận và mặt hàng theo tháng, quý, năm' },
     reports: { title: 'Báo Cáo Thống Kê', subtitle: 'Thống kê tổng hợp Nhập - Xuất - Tồn & phân tích mặt hàng' },
     categories: { title: 'Quản Lý Danh Mục', subtitle: 'Phân loại nhóm hàng & danh mục đơn vị tính linh hoạt' },
     accounts: { title: 'Quản Lý Tài Khoản', subtitle: 'Quản lý người dùng, phân quyền & bảo mật hệ thống' },
@@ -117,15 +122,15 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
 
   return (
     <>
-      <header className="sticky top-0 z-20 flex h-16 w-full items-center justify-between border-b-2 border-amber-500 bg-gradient-to-r from-slate-900 via-amber-950/20 to-slate-900 dark:bg-slate-900 px-4 md:px-6 shadow-md transition-colors">
+      <header className="sticky top-0 z-20 flex h-16 w-full items-center justify-between border-b border-slate-200 dark:border-b-2 dark:border-amber-500 bg-white dark:bg-gradient-to-r dark:from-slate-900 dark:via-amber-950/20 dark:to-slate-900 px-4 md:px-6 shadow-sm dark:shadow-md transition-colors">
         {/* Title & Subtitle with Gold accent line */}
         <div className="flex items-center gap-3">
-          <div className="h-8 w-1.5 rounded-full bg-gradient-to-b from-amber-400 to-red-600 shrink-0" />
+          <div className="h-8 w-1.5 rounded-full bg-gradient-to-b from-amber-500 to-red-600 shrink-0" />
           <div>
-            <h2 className="text-base font-extrabold text-amber-400 dark:text-amber-300 tracking-tight flex items-center gap-2">
+            <h2 className="text-base font-extrabold text-slate-900 dark:text-amber-300 tracking-tight flex items-center gap-2">
               <span>{currentTabInfo.title}</span>
             </h2>
-            <p className="hidden sm:block text-xs text-slate-300 dark:text-slate-400">
+            <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400">
               {currentTabInfo.subtitle}
             </p>
           </div>
@@ -134,7 +139,7 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
         {/* Center Search bar with live autocomplete */}
         <div className="hidden lg:flex items-center flex-1 max-w-md mx-6" ref={searchRef}>
           <div className="relative w-full">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-amber-400" />
+            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 dark:text-amber-400" />
             <input
               type="text"
               value={searchTerm}
@@ -144,12 +149,12 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
               }}
               onFocus={() => setIsOpen(true)}
               placeholder="Tìm theo mã hàng, tên vật tư, loại kho..."
-              className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl border border-amber-500/40 bg-slate-950/80 dark:bg-slate-800/80 text-white placeholder-slate-400 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400 transition-all"
+              className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-amber-500/40 bg-slate-50 dark:bg-slate-800/80 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
             />
             {searchTerm && (
               <button
                 onClick={() => setSearchTerm('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-400"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-500"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -157,12 +162,12 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
 
             {/* Dropdown Results */}
             {isOpen && searchTerm.trim() !== '' && (
-              <div className="absolute top-full left-0 right-0 mt-2 rounded-2xl border border-amber-500/30 bg-slate-900 shadow-2xl overflow-hidden z-50 animate-fadeIn">
-                <div className="p-2 border-b border-slate-800 text-[11px] font-semibold text-amber-400 uppercase tracking-wider">
+              <div className="absolute top-full left-0 right-0 mt-2 rounded-2xl border border-slate-200 dark:border-amber-500/30 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden z-50 animate-fadeIn">
+                <div className="p-2 border-b border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
                   Kết quả tìm kiếm ({matchedItems.length})
                 </div>
 
-                <div className="max-h-72 overflow-y-auto divide-y divide-slate-800">
+                <div className="max-h-72 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
                   {matchedItems.length > 0 ? (
                     matchedItems.slice(0, 8).map((item) => {
                       const isLowStock =
@@ -173,32 +178,32 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
                         <div
                           key={item.id}
                           onClick={() => handleSelectItem(item.code)}
-                          className="p-3 hover:bg-slate-800/80 cursor-pointer transition-colors flex items-center justify-between gap-3 group"
+                          className="p-3 hover:bg-slate-50 dark:hover:bg-slate-800/80 cursor-pointer transition-colors flex items-center justify-between gap-3 group"
                         >
                           <div className="flex items-center gap-2.5 overflow-hidden">
-                            <div className="h-8 w-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/20">
+                            <div className="h-8 w-8 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/20">
                               <Package className="h-4 w-4" />
                             </div>
                             <div className="truncate">
                               <div className="flex items-center gap-2">
-                                <span className="font-mono text-xs font-bold text-amber-400">
+                                <span className="font-mono text-xs font-bold text-amber-600 dark:text-amber-400">
                                   {item.code}
                                 </span>
-                                <span className="text-xs font-medium text-slate-100 truncate">
+                                <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
                                   {item.name}
                                 </span>
                               </div>
-                              <p className="text-[10px] text-slate-400 truncate">
+                              <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
                                 {item.warehouseName} &bull; {item.categoryName}
                               </p>
                             </div>
                           </div>
 
                           <div className="text-right shrink-0">
-                            <div className="text-xs font-bold text-white font-mono">
+                            <div className="text-xs font-bold text-slate-900 dark:text-white font-mono">
                               {formatNumber(item.stockQuantity)} {item.unitName}
                             </div>
-                            <div className="text-[10px] text-slate-400 mt-0.5">
+                            <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
                               {isOutOfStock ? 'Hết hàng' : 'Còn hàng'}
                             </div>
                           </div>
@@ -206,21 +211,21 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
                       );
                     })
                   ) : (
-                    <div className="p-8 text-center text-xs text-slate-400 flex flex-col items-center gap-2">
-                      <Package className="h-8 w-8 text-slate-600" />
+                    <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400 flex flex-col items-center gap-2">
+                      <Package className="h-8 w-8 text-slate-400 dark:text-slate-600" />
                       <p>Không tìm thấy sản phẩm nào phù hợp với từ khóa "{searchTerm}"</p>
                     </div>
                   )}
                 </div>
 
                 {matchedItems.length > 0 && (
-                  <div className="p-2 bg-slate-950 border-t border-slate-800">
+                  <div className="p-2 bg-slate-50 dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800">
                     <button
                       onClick={() => {
                         setActiveTab('stock-lookup');
                         setIsOpen(false);
                       }}
-                      className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium text-amber-400 hover:underline"
+                      className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:underline"
                     >
                       <span>Xem tất cả trong trang Tra Cứu Tồn Kho</span>
                       <ArrowRight className="h-3.5 w-3.5" />
@@ -238,7 +243,7 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
           <div className="hidden sm:flex items-center gap-1.5">
             <button
               onClick={onOpenQuickStockIn}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 shadow-md shadow-amber-500/20 transition-all border border-yellow-200/40"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 shadow-sm shadow-amber-500/20 transition-all border border-yellow-200/40 whitespace-nowrap shrink-0"
               title="Tạo phiếu nhập kho mới"
             >
               <ArrowDownLeft className="h-3.5 w-3.5 text-slate-950" />
@@ -246,7 +251,7 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
             </button>
             <button
               onClick={onOpenQuickStockOut}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-red-700 to-red-600 hover:from-red-600 hover:to-red-500 text-white shadow-md shadow-red-700/20 transition-all border border-red-500/40"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-red-700 to-red-600 hover:from-red-600 hover:to-red-500 text-white shadow-sm shadow-red-700/20 transition-all border border-red-500/40 whitespace-nowrap shrink-0"
               title="Tạo phiếu xuất kho mới"
             >
               <ArrowUpRight className="h-3.5 w-3.5 text-white" />
@@ -254,28 +259,39 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
             </button>
           </div>
 
+          {/* Theme Toggle Button */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Chuyển sang nền sáng' : 'Chuyển sang nền tối'}
+            aria-label={theme === 'dark' ? 'Chuyển sang nền sáng' : 'Chuyển sang nền tối'}
+            className="flex items-center justify-center h-9 w-9 rounded-xl border border-slate-200 dark:border-amber-500/30 bg-slate-50 dark:bg-slate-950/60 text-slate-600 dark:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+          >
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
+
           {/* User Account Menu Dropdown */}
           {currentUser && (
             <div className="relative" ref={userMenuRef}>
               <button
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-xl border border-amber-500/30 bg-slate-950/60 hover:bg-slate-800 transition-all select-none"
+                className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-xl border border-slate-200 dark:border-amber-500/30 bg-slate-50 dark:bg-slate-950/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all select-none"
               >
-                <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-amber-500 to-yellow-400 text-red-950 flex items-center justify-center font-extrabold text-xs shadow-md shadow-amber-500/20 border border-yellow-200">
+                <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-amber-500 to-yellow-400 text-red-950 flex items-center justify-center font-extrabold text-xs shadow-sm shadow-amber-500/20 border border-yellow-200">
                   {currentUser.fullName ? currentUser.fullName.charAt(0).toUpperCase() : 'U'}
                 </div>
                 <div className="text-left hidden md:block">
-                  <div className="text-xs font-bold text-white leading-tight flex items-center gap-1">
+                  <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight flex items-center gap-1">
                     <span>{currentUser.fullName}</span>
-                    <span className="text-[10px] px-1.5 py-0.2 rounded font-bold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    <span className="text-[10px] px-1.5 py-0.2 rounded font-bold uppercase bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                       {currentUser.role === 'admin' ? 'Admin' : 'Thủ kho'}
                     </span>
                   </div>
-                  <div className="text-[10px] text-amber-200/70 font-mono">
+                  <div className="text-[10px] text-slate-500 dark:text-amber-200/70 font-mono">
                     @{currentUser.username} &bull; {currentUser.position}
                   </div>
                 </div>
-                <ChevronDown className="h-3.5 w-3.5 text-amber-400" />
+                <ChevronDown className="h-3.5 w-3.5 text-slate-500 dark:text-amber-400" />
               </button>
 
               {/* Dropdown Menu */}

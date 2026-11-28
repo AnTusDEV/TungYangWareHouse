@@ -180,10 +180,10 @@ export function AccountManager() {
   // Non-admin view restriction
   if (currentUser?.role !== 'admin') {
     return (
-      <div className="p-8 text-center rounded-2xl bg-slate-900 border border-slate-800 text-slate-300">
+      <div className="p-8 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 shadow-sm">
         <ShieldAlert className="h-12 w-12 text-rose-500 mx-auto mb-3" />
-        <h2 className="text-lg font-bold text-white mb-1">Quyền Truy Cập Bị Hạn Chế</h2>
-        <p className="text-xs text-slate-400 max-w-md mx-auto">
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Quyền Truy Cập Bị Hạn Chế</h2>
+        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
           Tính năng quản lý tài khoản chỉ dành riêng cho Quản trị viên hệ thống (Admin).
         </p>
       </div>

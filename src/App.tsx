@@ -12,6 +12,7 @@ import { StockOutManager } from './components/stock-out/StockOutManager';
 import { StockLookup } from './components/stock-lookup/StockLookup';
 import { TransactionHistory } from './components/history/TransactionHistory';
 import { ReportsView } from './components/reports/ReportsView';
+import { StatisticsView } from './components/statistics/StatisticsView';
 import { CategoryUnitManager } from './components/categories/CategoryUnitManager';
 import { SettingsView } from './components/settings/SettingsView';
 import { AccountManager } from './components/auth/AccountManager';
@@ -59,6 +60,8 @@ export default function App() {
         return <StockLookup />;
       case 'history':
         return <TransactionHistory />;
+      case 'statistics':
+        return <StatisticsView />;
       case 'reports':
         return <ReportsView />;
       case 'categories':

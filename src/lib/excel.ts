@@ -139,3 +139,89 @@ export async function parseExcelFile(file: File): Promise<any[]> {
     reader.readAsArrayBuffer(file);
   });
 }
+
+export interface DepartmentStatExportRow {
+  department: string;
+  totalQuantity: number;
+  voucherCount: number;
+  distinctProductsCount: number;
+  sharePercent: number;
+  products: {
+    itemCode: string;
+    itemName: string;
+    unitName: string;
+    quantity: number;
+  }[];
+}
+
+export interface ProductStatExportRow {
+  itemCode: string;
+  itemName: string;
+  categoryName: string;
+  unitName: string;
+  totalQuantity: number;
+  voucherCount: number;
+  departmentCount: number;
+  sharePercent: number;
+  departments: {
+    department: string;
+    quantity: number;
+  }[];
+}
+
+export function exportStatisticsToExcel(
+  periodLabel: string,
+  departmentStats: DepartmentStatExportRow[],
+  productStats: ProductStatExportRow[],
+  fileName = 'Thong_ke_cap_phat.xlsx'
+) {
+  const workbook = XLSX.utils.book_new();
+
+  const deptSheetData = departmentStats.map((d, idx) => ({
+    'STT': idx + 1,
+    'Kỳ Thống Kê': periodLabel,
+    'Bộ Phận Nhận': d.department,
+    'Số Phiếu Xuất': d.voucherCount,
+    'Số Mặt Hàng': d.distinctProductsCount,
+    'Tổng SL Đã Nhận': d.totalQuantity,
+    'Tỷ Trọng (%)': Number(d.sharePercent.toFixed(1)),
+  }));
+  const deptSheet = XLSX.utils.json_to_sheet(deptSheetData);
+  XLSX.utils.book_append_sheet(workbook, deptSheet, 'Theo Bộ Phận');
+
+  const productSheetData = productStats.map((p, idx) => ({
+    'STT': idx + 1,
+    'Kỳ Thống Kê': periodLabel,
+    'Mã Hàng': p.itemCode,
+    'Tên Sản Phẩm': p.itemName,
+    'Nhóm Hàng': p.categoryName || '-',
+    'ĐVT': p.unitName || '-',
+    'Số Bộ Phận Nhận': p.departmentCount,
+    'Số Lần Cấp': p.voucherCount,
+    'Tổng SL Đã Cấp': p.totalQuantity,
+    'Tỷ Trọng (%)': Number(p.sharePercent.toFixed(1)),
+  }));
+  const productSheet = XLSX.utils.json_to_sheet(productSheetData);
+  XLSX.utils.book_append_sheet(workbook, productSheet, 'Theo Sản Phẩm');
+
+  const detailRows: any[] = [];
+  let detailIdx = 1;
+  departmentStats.forEach((d) => {
+    d.products.forEach((p) => {
+      detailRows.push({
+        'STT': detailIdx++,
+        'Kỳ Thống Kê': periodLabel,
+        'Bộ Phận Nhận': d.department,
+        'Mã Hàng': p.itemCode,
+        'Tên Sản Phẩm': p.itemName,
+        'ĐVT': p.unitName || '-',
+        'Số Lượng Đã Nhận': p.quantity,
+      });
+    });
+  });
+  const detailSheet = XLSX.utils.json_to_sheet(detailRows);
+  XLSX.utils.book_append_sheet(workbook, detailSheet, 'Chi Tiết Bộ Phận - SP');
+
+  XLSX.writeFile(workbook, fileName);
+}
+

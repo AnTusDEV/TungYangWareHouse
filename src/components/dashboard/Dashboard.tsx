@@ -123,10 +123,10 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6 pb-8">
-      {/* Top Banner Header - Matching Image Dashboard Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 border border-slate-800 text-white shadow-xl">
+      {/* Top Banner Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-5 rounded-2xl bg-white dark:bg-gradient-to-r dark:from-slate-900 dark:via-slate-900 dark:to-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white shadow-sm dark:shadow-xl">
         <div>
-          <h1 className="text-xl font-bold mt-1 text-white tracking-tight">
+          <h1 className="text-xl font-bold mt-1 text-slate-900 dark:text-white tracking-tight">
             Thống Kê Vận Hành Kho Văn Phòng
           </h1>
         </div>
@@ -483,6 +483,64 @@ export function Dashboard() {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      {/* Row 3: Warehouse Quick Breakdown Cards */}
+      <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Boxes className="h-4 w-4 text-cyan-500" />
+              Tra Cứu Nhanh Tồn Kho Theo Phòng Kho
+            </h3>
+            <p className="text-xs text-slate-500">Nhấn vào từng phòng kho bên dưới để mở popup xem số lượng tồn chi tiết</p>
+          </div>
+          <button
+            onClick={() => setActiveTab('warehouses')}
+            className="text-xs text-cyan-500 hover:underline font-semibold"
+          >
+            Sơ đồ kho &rarr;
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {warehouses.map((wh) => {
+            const whItems = items.filter((i) => i.warehouseId === wh.id);
+            const totalQty = whItems.reduce((sum, i) => sum + i.stockQuantity, 0);
+
+            return (
+              <div
+                key={wh.id}
+                onClick={() => setSelectedWarehouseModal(wh)}
+                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-cyan-500/50 bg-slate-50/50 dark:bg-slate-800/30 hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/10 text-cyan-500 border border-cyan-500/20">
+                      {wh.code}
+                    </span>
+                    <span className="text-[11px] text-slate-400 group-hover:text-cyan-500 font-medium">
+                      Xem popup &rarr;
+                    </span>
+                  </div>
+                  <h4 className="font-bold text-slate-900 dark:text-slate-100 text-xs group-hover:text-cyan-500 transition-colors">
+                    {wh.name}
+                  </h4>
+                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                    Quản kho: {wh.manager || 'Chưa phân công'}
+                  </p>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">{whItems.length} mặt hàng</span>
+                  <span className="font-bold text-cyan-600 dark:text-cyan-400">
+                    {formatNumber(totalQty)} tồn
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
