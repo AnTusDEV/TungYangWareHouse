@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   Building2,
@@ -10,6 +10,7 @@ import {
   Filter,
   Package,
   Search,
+  Trash2,
   ArrowUpRight,
   ArrowUpDown,
 } from 'lucide-react';
@@ -27,13 +28,64 @@ import { useInventoryStore } from '../../store/useInventoryStore';
 import { formatNumber } from '../../lib/formatters';
 import { exportStatisticsToExcel } from '../../lib/excel';
 
-type PeriodType = 'month' | 'quarter' | 'year';
+type PeriodType = 'week' | 'month' | 'quarter' | 'year';
 type StatTab = 'by-department' | 'by-product';
 
 interface ParsedDateParts {
   year: number;
   month: number; // 1..12
+  day: number; // 1..31
   quarter: number; // 1..4
+  isoWeek: number; // 1..53
+  isoWeekYear: number;
+}
+
+function getISOWeekInfo(year: number, month: number, day: number): { isoWeek: number; isoWeekYear: number } {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const dayNum = date.getUTCDay() || 7; // Mon=1 .. Sun=7
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum); // Nearest Thursday
+  const isoWeekYear = date.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(isoWeekYear, 0, 1));
+  const isoWeek = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return { isoWeek, isoWeekYear };
+}
+
+function formatShortDDMM(d: Date): string {
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}`;
+}
+
+interface WeekOption {
+  week: number;
+  rangeLabel: string;
+  label: string;
+}
+
+function getISOWeeksOfYear(isoYear: number): WeekOption[] {
+  // Week 1 of an ISO year always contains Jan 4
+  const jan4 = new Date(Date.UTC(isoYear, 0, 4));
+  const jan4Day = jan4.getUTCDay() || 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setUTCDate(jan4.getUTCDate() - (jan4Day - 1));
+
+  // Total ISO weeks in isoYear is the ISO week of Dec 28
+  const { isoWeek: totalWeeks } = getISOWeekInfo(isoYear, 12, 28);
+
+  const weeks: WeekOption[] = [];
+  for (let w = 1; w <= totalWeeks; w++) {
+    const start = new Date(week1Monday);
+    start.setUTCDate(week1Monday.getUTCDate() + (w - 1) * 7);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 6);
+    const rangeLabel = `${formatShortDDMM(start)} – ${formatShortDDMM(end)}`;
+    weeks.push({
+      week: w,
+      rangeLabel,
+      label: `Tuần ${w} (${rangeLabel})`,
+    });
+  }
+  return weeks;
 }
 
 function parseDateParts(dateStr: string): ParsedDateParts | null {
@@ -45,18 +97,22 @@ function parseDateParts(dateStr: string): ParsedDateParts | null {
   if (isoMatch) {
     const year = Number(isoMatch[1]);
     const month = Number(isoMatch[2]);
-    if (year >= 1900 && month >= 1 && month <= 12) {
-      return { year, month, quarter: Math.ceil(month / 3) };
+    const day = Number(isoMatch[3]);
+    if (year >= 1900 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const { isoWeek, isoWeekYear } = getISOWeekInfo(year, month, day);
+      return { year, month, day, quarter: Math.ceil(month / 3), isoWeek, isoWeekYear };
     }
   }
 
   // Match DD/MM/YYYY
   const vnMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (vnMatch) {
+    const day = Number(vnMatch[1]);
     const month = Number(vnMatch[2]);
     const year = Number(vnMatch[3]);
-    if (year >= 1900 && month >= 1 && month <= 12) {
-      return { year, month, quarter: Math.ceil(month / 3) };
+    if (year >= 1900 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const { isoWeek, isoWeekYear } = getISOWeekInfo(year, month, day);
+      return { year, month, day, quarter: Math.ceil(month / 3), isoWeek, isoWeekYear };
     }
   }
 
@@ -64,7 +120,9 @@ function parseDateParts(dateStr: string): ParsedDateParts | null {
   if (!isNaN(parsed.getTime())) {
     const year = parsed.getFullYear();
     const month = parsed.getMonth() + 1;
-    return { year, month, quarter: Math.ceil(month / 3) };
+    const day = parsed.getDate();
+    const { isoWeek, isoWeekYear } = getISOWeekInfo(year, month, day);
+    return { year, month, day, quarter: Math.ceil(month / 3), isoWeek, isoWeekYear };
   }
 
   return null;
@@ -129,20 +187,31 @@ interface ProductStat {
 const CHART_COLORS = ['#06b6d4', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#ef4444', '#14b8a6'];
 
 export function StatisticsView() {
-  const { items, vouchers, logs, warehouses, setActiveTab } = useInventoryStore();
+  const {
+    items,
+    vouchers,
+    logs,
+    warehouses,
+    setActiveTab,
+    isSQLServerConnected,
+    fetchFromSQLServer,
+    clearLocalData,
+  } = useInventoryStore();
+
+  useEffect(() => {
+    fetchFromSQLServer();
+  }, [fetchFromSQLServer]);
 
   const itemMetaById = useMemo(() => new Map(items.map((it) => [it.id, it])), [items]);
   const itemMetaByCode = useMemo(() => new Map(items.map((it) => [it.code, it])), [items]);
 
-  // Build normalized outbound line items from vouchers + fallback logs
+  // Build normalized outbound line items from vouchers (with log fallback for voucher items)
   const allOutboundRecords = useMemo<OutboundLineRecord[]>(() => {
     const records: OutboundLineRecord[] = [];
-    const seenVoucherIds = new Set<string>();
 
     vouchers
       .filter((v) => v.type === 'OUT')
       .forEach((v) => {
-        seenVoucherIds.add(v.id);
         const dept = (v.department || '').trim() || 'Chưa phân bộ phận';
 
         let lineItems = v.items || [];
@@ -185,51 +254,34 @@ export function StatisticsView() {
         });
       });
 
-    // Include any orphan OUT logs that don't have a voucher entry
-    logs
-      .filter((l) => l.type === 'OUT' && !seenVoucherIds.has(l.voucherId))
-      .forEach((l) => {
-        const qty = Number(l.quantity) || 0;
-        if (qty <= 0) return;
-        const meta = itemMetaById.get(l.itemId) || itemMetaByCode.get(l.itemCode);
-        records.push({
-          voucherId: l.voucherId || l.id,
-          voucherCode: l.voucherCode || '-',
-          date: l.date,
-          department: (l.department || '').trim() || 'Chưa phân bộ phận',
-          warehouseId: l.warehouseId,
-          warehouseName: l.warehouseName,
-          itemId: l.itemId || meta?.id || l.itemCode,
-          itemCode: l.itemCode || meta?.code || '-',
-          itemName: l.itemName || meta?.name || 'Sản phẩm không xác định',
-          categoryName: l.categoryName || meta?.categoryName || '',
-          unitName: meta?.unitName || '',
-          quantity: qty,
-        });
-      });
-
     return records;
   }, [vouchers, logs, itemMetaById, itemMetaByCode]);
 
   // Available years & smart default period from data
-  const { availableYears, defaultYear, defaultMonth } = useMemo(() => {
+  const { availableYears, defaultYear, defaultMonth, defaultWeek } = useMemo(() => {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth() + 1;
+    const currentDay = now.getDate();
+    const { isoWeek: currentWeek } = getISOWeekInfo(currentYear, currentMonth, currentDay);
+
     const yearSet = new Set<number>([currentYear]);
     let latestScore = 0;
     let latestYear = currentYear;
     let latestMonth = currentMonth;
+    let latestWeek = currentWeek;
 
     allOutboundRecords.forEach((r) => {
       const parts = parseDateParts(r.date);
       if (parts) {
         yearSet.add(parts.year);
-        const score = parts.year * 100 + parts.month;
+        yearSet.add(parts.isoWeekYear);
+        const score = parts.year * 10000 + parts.month * 100 + parts.day;
         if (score > latestScore) {
           latestScore = score;
           latestYear = parts.year;
           latestMonth = parts.month;
+          latestWeek = parts.isoWeek;
         }
       }
     });
@@ -239,12 +291,14 @@ export function StatisticsView() {
       availableYears: years,
       defaultYear: latestScore > 0 ? latestYear : currentYear,
       defaultMonth: latestScore > 0 ? latestMonth : currentMonth,
+      defaultWeek: latestScore > 0 ? latestWeek : currentWeek,
     };
   }, [allOutboundRecords]);
 
   // Filter States
   const [periodType, setPeriodType] = useState<PeriodType>('month');
   const [selectedYear, setSelectedYear] = useState<number>(defaultYear);
+  const [selectedWeek, setSelectedWeek] = useState<number>(defaultWeek);
   const [selectedMonth, setSelectedMonth] = useState<number>(defaultMonth);
   const [selectedQuarter, setSelectedQuarter] = useState<number>(Math.ceil(defaultMonth / 3));
   const [selectedWarehouse, setSelectedWarehouse] = useState<string>('ALL');
@@ -252,6 +306,10 @@ export function StatisticsView() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeStatTab, setActiveStatTab] = useState<StatTab>('by-department');
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
+
+  const weeksOfSelectedYear = useMemo(() => getISOWeeksOfYear(selectedYear), [selectedYear]);
+  const effectiveSelectedWeek =
+    selectedWeek > weeksOfSelectedYear.length ? weeksOfSelectedYear.length : selectedWeek;
 
   // Expanded row keys
   const [expandedDepartments, setExpandedDepartments] = useState<Record<string, boolean>>({});
@@ -272,9 +330,13 @@ export function StatisticsView() {
       const parts = parseDateParts(r.date);
       if (!parts) return false;
 
-      if (parts.year !== selectedYear) return false;
-      if (periodType === 'month' && parts.month !== selectedMonth) return false;
-      if (periodType === 'quarter' && parts.quarter !== selectedQuarter) return false;
+      if (periodType === 'week') {
+        if (parts.isoWeekYear !== selectedYear || parts.isoWeek !== effectiveSelectedWeek) return false;
+      } else {
+        if (parts.year !== selectedYear) return false;
+        if (periodType === 'month' && parts.month !== selectedMonth) return false;
+        if (periodType === 'quarter' && parts.quarter !== selectedQuarter) return false;
+      }
 
       if (selectedWarehouse !== 'ALL' && r.warehouseId !== selectedWarehouse) return false;
       if (selectedDepartmentFilter !== 'ALL' && r.department !== selectedDepartmentFilter) return false;
@@ -293,6 +355,7 @@ export function StatisticsView() {
     allOutboundRecords,
     periodType,
     selectedYear,
+    effectiveSelectedWeek,
     selectedMonth,
     selectedQuarter,
     selectedWarehouse,
@@ -302,10 +365,16 @@ export function StatisticsView() {
 
   // Period label for display & Excel export
   const periodLabel = useMemo(() => {
+    if (periodType === 'week') {
+      const weekMeta = weeksOfSelectedYear.find((w) => w.week === effectiveSelectedWeek);
+      return weekMeta
+        ? `Tuần ${effectiveSelectedWeek}/${selectedYear} (${weekMeta.rangeLabel})`
+        : `Tuần ${effectiveSelectedWeek}/${selectedYear}`;
+    }
     if (periodType === 'month') return `Tháng ${selectedMonth}/${selectedYear}`;
     if (periodType === 'quarter') return `Quý ${selectedQuarter}/${selectedYear}`;
     return `Năm ${selectedYear}`;
-  }, [periodType, selectedYear, selectedMonth, selectedQuarter]);
+  }, [periodType, selectedYear, effectiveSelectedWeek, weeksOfSelectedYear, selectedMonth, selectedQuarter]);
 
   // Aggregations: KPIs, Department Stats, Product Stats
   const { totalIssuedQty, totalVouchersCount, departmentStats, productStats } = useMemo(() => {
@@ -529,6 +598,7 @@ export function StatisticsView() {
             <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
               {(
                 [
+                  { id: 'week', label: 'Theo Tuần' },
                   { id: 'month', label: 'Theo Tháng' },
                   { id: 'quarter', label: 'Theo Quý' },
                   { id: 'year', label: 'Theo Năm' },
@@ -561,6 +631,23 @@ export function StatisticsView() {
           </div>
         </div>
 
+        {/* Offline / Local Cache Notice */}
+        {!isSQLServerConnected && allOutboundRecords.length > 0 && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 rounded-xl border border-amber-300 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 text-xs text-amber-900 dark:text-amber-200">
+            <span>
+              Chưa kết nối SQL Server — số liệu đang hiển thị từ bộ nhớ cache cục bộ trên trình duyệt.
+            </span>
+            <button
+              type="button"
+              onClick={clearLocalData}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-500/40 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 font-semibold transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Xóa cache trình duyệt</span>
+            </button>
+          </div>
+        )}
+
         {/* Sub-filters: Year, Month/Quarter, Warehouse, Department, Search */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
           {/* Year Selector */}
@@ -583,7 +670,28 @@ export function StatisticsView() {
             </select>
           </div>
 
-          {/* Month or Quarter Selector */}
+          {/* Week, Month or Quarter Selector */}
+          {periodType === 'week' && (
+            <div className="flex items-center gap-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 px-3 py-2">
+              <Filter className="h-4 w-4 text-slate-400 shrink-0" />
+              <label htmlFor="stat-week" className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                Tuần:
+              </label>
+              <select
+                id="stat-week"
+                value={effectiveSelectedWeek}
+                onChange={(e) => setSelectedWeek(Number(e.target.value))}
+                className="w-full bg-transparent text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none cursor-pointer"
+              >
+                {weeksOfSelectedYear.map((w) => (
+                  <option key={w.week} value={w.week} className="bg-white dark:bg-slate-900">
+                    {w.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {periodType === 'month' && (
             <div className="flex items-center gap-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 px-3 py-2">
               <Filter className="h-4 w-4 text-slate-400 shrink-0" />

@@ -17,7 +17,6 @@ import {
   apiResetPassword,
   apiUpdateUserInfo,
   apiDeleteUser,
-  getStoredLocalUsers,
 } from '../lib/authApi';
 import { useInventoryStore } from './useInventoryStore';
 import { saveUserToSQLServer, deleteUserFromSQLServer } from '../lib/sqlServerSync';
@@ -158,8 +157,8 @@ export const useAuthStore = create<AuthState>()(
 
           const list = await apiFetchUsers();
           set({ usersList: list, isLoading: false });
-        } catch (err) {
-          set({ usersList: getStoredLocalUsers(), isLoading: false });
+        } catch (err: any) {
+          set({ usersList: [], isLoading: false, authError: err?.message || 'Không thể tải danh sách người dùng từ CSDL' });
         }
       },
 

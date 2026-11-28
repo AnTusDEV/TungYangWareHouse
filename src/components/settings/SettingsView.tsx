@@ -84,7 +84,7 @@ export function SettingsView() {
 
   // Handle SQL Server Config Save & Fetch
   const handleSaveAndSync = async () => {
-    setSqlServerConfig(formConfig);
+    setSqlServerConfig({ ...formConfig, isCustom: true });
     setTestResult({ success: true, message: 'Đã lưu cấu hình SQL Server! Đang tải dữ liệu...' });
     await fetchFromSQLServer();
   };
@@ -93,7 +93,7 @@ export function SettingsView() {
   const handleTestConnection = async () => {
     setIsTesting(true);
     setTestResult(null);
-    const result = await testSQLServerConfig(formConfig);
+    const result = await testSQLServerConfig({ ...formConfig, isCustom: true });
     setIsTesting(false);
     setTestResult(result);
   };
@@ -102,7 +102,7 @@ export function SettingsView() {
   const handleInitTables = async () => {
     setIsInitializing(true);
     setTestResult(null);
-    const result = await initSQLServerDb(formConfig);
+    const result = await initSQLServerDb({ ...formConfig, isCustom: true });
     setIsInitializing(false);
     setTestResult(result);
   };
@@ -227,8 +227,8 @@ export function SettingsView() {
                   Cấu Hình Kết Nối Microsoft SQL Server Database
                 </h3>
                 <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${isSQLServerConnected
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
                   }`}>
                   {isSQLServerConnected ? 'SQL Server Đã Kết Nối' : 'Chưa Kết Nối SQL Server'}
                 </span>
@@ -243,8 +243,8 @@ export function SettingsView() {
         {/* Feedback Alert */}
         {testResult && (
           <div className={`p-3.5 rounded-xl text-xs flex items-center justify-between gap-2 border ${testResult.success
-              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-300'
-              : 'bg-rose-500/10 border-rose-500/20 text-rose-700 dark:text-rose-300'
+            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+            : 'bg-rose-500/10 border-rose-500/20 text-rose-700 dark:text-rose-300'
             }`}>
             <div className="flex items-center gap-2">
               {testResult.success ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" /> : <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />}
@@ -403,8 +403,8 @@ export function SettingsView() {
 
         {changePassFeedback && (
           <div className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${changePassFeedback.success
-              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-              : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400'
+            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+            : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400'
             }`}>
             {changePassFeedback.success ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
             <span>{changePassFeedback.message}</span>

@@ -15,7 +15,7 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const [previewData, setPreviewData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [resultInfo, setResultInfo] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -23,7 +23,7 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
 
     setFile(selectedFile);
     setIsLoading(true);
-    setResultMessage(null);
+    setResultInfo(null);
 
     try {
       const rows = await parseExcelFile(selectedFile);
@@ -44,25 +44,42 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
 
       setPreviewData(formatted);
     } catch (error) {
-      setResultMessage('Lỗi đọc file Excel. Vui lòng kiểm tra lại định dạng file .xlsx hoặc .csv');
+      setResultInfo({
+        type: 'error',
+        message: 'Lỗi đọc file Excel. Vui lòng kiểm tra lại định dạng file .xlsx hoặc .csv',
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleConfirmImport = () => {
-    if (previewData.length === 0) return;
+  const handleConfirmImport = async () => {
+    if (previewData.length === 0 || isLoading) return;
+    setIsLoading(true);
+    setResultInfo(null);
 
-    const res = importItems(previewData);
-    setResultMessage(
-      `Đã nhập và lưu thành công ${res.successCount} mặt hàng vào cơ sở dữ liệu (Database).`
-    );
-    setTimeout(() => {
-      onClose();
-      setFile(null);
-      setPreviewData([]);
-      setResultMessage(null);
-    }, 1500);
+    try {
+      const res = await importItems(previewData);
+      if (res.success) {
+        setResultInfo({
+          type: 'success',
+          message: res.message,
+        });
+        setTimeout(() => {
+          onClose();
+          setFile(null);
+          setPreviewData([]);
+          setResultInfo(null);
+        }, 1200);
+      } else {
+        setResultInfo({
+          type: 'error',
+          message: res.message,
+        });
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -76,7 +93,8 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
           <button
             type="button"
             onClick={downloadImportTemplate}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors mr-auto"
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors mr-auto disabled:opacity-50"
           >
             <Download className="h-3.5 w-3.5 text-cyan-500" />
             Tải mẫu Excel (.xlsx)
@@ -84,7 +102,8 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+            disabled={isLoading}
+            className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
           >
             Đóng
           </button>
@@ -95,7 +114,7 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
             className="flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white shadow-sm transition-colors"
           >
             <CheckCircle className="h-3.5 w-3.5" />
-            Xác nhận Import ({previewData.length})
+            {isLoading ? 'Đang lưu SQL Server...' : `Xác nhận Import (${previewData.length})`}
           </button>
         </>
       }
@@ -129,10 +148,20 @@ export function ExcelImportModal({ isOpen, onClose }: ExcelImportModalProps) {
         </div>
 
         {/* Result notification */}
-        {resultMessage && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-medium border border-emerald-500/20">
-            <CheckCircle className="h-4 w-4" />
-            <span>{resultMessage}</span>
+        {resultInfo && (
+          <div
+            className={`flex items-center gap-2 p-3 rounded-lg text-xs font-medium border ${
+              resultInfo.type === 'success'
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                : 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+            }`}
+          >
+            {resultInfo.type === 'success' ? (
+              <CheckCircle className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="h-4 w-4 shrink-0" />
+            )}
+            <span>{resultInfo.message}</span>
           </div>
         )}
 

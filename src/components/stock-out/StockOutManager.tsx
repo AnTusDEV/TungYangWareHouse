@@ -12,6 +12,8 @@ import {
   Eye,
   Check,
   AlertTriangle,
+  UploadCloud,
+  RefreshCw,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -29,11 +31,20 @@ export function StockOutManager() {
   const { currentUser } = useAuthStore();
   const currentUserName = currentUser?.fullName || currentUser?.username || 'Admin';
 
-  const { items, warehouses, vouchers, logs, createStockOutVoucher } = useInventoryStore();
+  const {
+    items,
+    warehouses,
+    vouchers,
+    logs,
+    createStockOutVoucher,
+    syncLocalVouchersToSQLServer,
+  } = useInventoryStore();
 
   const outboundVouchers = vouchers.filter((v) => v.type === 'OUT');
 
   const [isCreating, setIsCreating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isSyncingDetails, setIsSyncingDetails] = useState(false);
   const [viewingVoucher, setViewingVoucher] = useState<StockVoucher | null>(null);
   const [alertInfo, setAlertInfo] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -93,6 +104,21 @@ export function StockOutManager() {
     }
   };
 
+  const handleSyncDetailsToDb = async () => {
+    if (isSyncingDetails) return;
+    setAlertInfo(null);
+    setIsSyncingDetails(true);
+    try {
+      const res = await syncLocalVouchersToSQLServer('OUT');
+      setAlertInfo({
+        type: res.success ? 'success' : 'error',
+        message: res.message,
+      });
+    } finally {
+      setIsSyncingDetails(false);
+    }
+  };
+
   const handleAddLine = () => {
     const availableItem =
       items.find((i) => i.stockQuantity > 0 && !lineItems.some((l) => l.itemId === i.id)) ||
@@ -119,8 +145,9 @@ export function StockOutManager() {
     setLineItems(updated);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     setAlertInfo(null);
 
     // Frontend validation before calling store
@@ -136,23 +163,28 @@ export function StockOutManager() {
       }
     }
 
-    const res = createStockOutVoucher({
-      date,
-      person,
-      department: department.trim() || undefined,
-      warehouseId,
-      note,
-      items: lineItems,
-    });
+    setIsSaving(true);
+    try {
+      const res = await createStockOutVoucher({
+        date,
+        person,
+        department: department.trim() || undefined,
+        warehouseId,
+        note,
+        items: lineItems,
+      });
 
-    if (res.success) {
-      setAlertInfo({ type: 'success', message: res.message });
-      setTimeout(() => {
-        setIsCreating(false);
-        setAlertInfo(null);
-      }, 1200);
-    } else {
-      setAlertInfo({ type: 'error', message: res.message });
+      if (res.success) {
+        setAlertInfo({ type: 'success', message: res.message });
+        setTimeout(() => {
+          setIsCreating(false);
+          setAlertInfo(null);
+        }, 1200);
+      } else {
+        setAlertInfo({ type: 'error', message: res.message });
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -235,6 +267,31 @@ export function StockOutManager() {
 
   return (
     <div className="space-y-6">
+      {/* Top Banner alert if any action result */}
+      {alertInfo && !isCreating && (
+        <div
+          className={`p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${alertInfo.type === 'success'
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+            : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+            }`}
+        >
+          <div className="flex items-center gap-2">
+            {alertInfo.type === 'success' ? (
+              <CheckCircle className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="h-4 w-4 shrink-0" />
+            )}
+            <span>{alertInfo.message}</span>
+          </div>
+          <button
+            onClick={() => setAlertInfo(null)}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -247,13 +304,30 @@ export function StockOutManager() {
           </p>
         </div>
 
-        <button
-          onClick={handleOpenCreate}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/20 transition-all self-start sm:self-auto"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Tạo Phiếu Xuất Mới</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={handleSyncDetailsToDb}
+            disabled={isSyncingDetails || outboundVouchers.length === 0}
+            title="Đẩy toàn bộ chi tiết phiếu xuất đang lưu trên máy hiện tại lên SQL Server để các thiết bị khác xem được"
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isSyncingDetails ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : (
+              <UploadCloud className="h-4 w-4" />
+            )}
+            <span>{isSyncingDetails ? 'Đang đồng bộ lên DB...' : 'Đồng bộ chi tiết lên DB'}</span>
+          </button>
+
+          <button
+            onClick={handleOpenCreate}
+            className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/20 transition-all"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Tạo Phiếu Xuất Mới</span>
+          </button>
+        </div>
       </div>
 
       {/* List of Outbound Vouchers */}
@@ -278,17 +352,19 @@ export function StockOutManager() {
             <button
               type="button"
               onClick={() => setIsCreating(false)}
-              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+              disabled={isSaving}
+              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
             >
               Hủy
             </button>
             <button
               type="submit"
               form="stock-out-form"
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-colors"
+              disabled={isSaving}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <Check className="h-4 w-4" />
-              Lưu Phiếu & Trừ Tồn Kho
+              {isSaving ? 'Đang lưu vào SQL Server...' : 'Lưu Phiếu & Trừ Tồn Kho'}
             </button>
           </>
         }

@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   History,
   Boxes,
+  CheckCircle,
+  AlertCircle,
 } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { Item } from '../../types/inventory';
@@ -42,11 +44,14 @@ export function ItemManager() {
   const [selectedWarehouse, setSelectedWarehouse] = useState<string>('ALL');
   const [selectedStockFilter, setSelectedStockFilter] = useState<string>('ALL');
 
-  // Modals
+  // Modals & Async Status
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [alertInfo, setAlertInfo] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   // Form Data
   const [formData, setFormData] = useState({
@@ -62,6 +67,7 @@ export function ItemManager() {
 
   const handleOpenAdd = () => {
     setEditingItem(null);
+    setModalError(null);
     const existingCodes = items.map((i) => i.code);
     setFormData({
       code: generateItemCode(existingCodes),
@@ -78,6 +84,7 @@ export function ItemManager() {
 
   const handleOpenEdit = (item: Item) => {
     setEditingItem(item);
+    setModalError(null);
     setFormData({
       code: item.code,
       name: item.name,
@@ -91,23 +98,40 @@ export function ItemManager() {
     setIsFormModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name.trim()) return;
+    if (!formData.name.trim() || isSaving) return;
 
-    if (editingItem) {
-      updateItem(editingItem.id, formData);
-    } else {
-      addItem(formData);
+    setModalError(null);
+    setIsSaving(true);
+    try {
+      const res = editingItem
+        ? await updateItem(editingItem.id, formData)
+        : await addItem(formData);
+
+      if (res.success) {
+        setAlertInfo({ type: 'success', message: res.message });
+        setIsFormModalOpen(false);
+      } else {
+        setModalError(res.message);
+      }
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsFormModalOpen(false);
   };
 
-  const handleConfirmDelete = () => {
-    if (deletingId) {
-      deleteItem(deletingId);
+  const handleConfirmDelete = async () => {
+    if (!deletingId || isSaving) return;
+    setIsSaving(true);
+    try {
+      const res = await deleteItem(deletingId);
+      setAlertInfo({
+        type: res.success ? 'success' : 'error',
+        message: res.message,
+      });
       setDeletingId(null);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -249,6 +273,30 @@ export function ItemManager() {
 
   return (
     <div className="space-y-6">
+      {alertInfo && (
+        <div
+          className={`p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${alertInfo.type === 'success'
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+            : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+            }`}
+        >
+          <div className="flex items-center gap-2">
+            {alertInfo.type === 'success' ? (
+              <CheckCircle className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="h-4 w-4 shrink-0" />
+            )}
+            <span>{alertInfo.message}</span>
+          </div>
+          <button
+            onClick={() => setAlertInfo(null)}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -355,22 +403,30 @@ export function ItemManager() {
           <>
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => setIsFormModalOpen(false)}
-              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
             >
               Hủy
             </button>
             <button
               type="submit"
               form="item-form"
-              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow-sm transition-colors"
+              disabled={isSaving}
+              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {editingItem ? 'Lưu Thay Đổi' : 'Thêm Mặt Hàng'}
+              {isSaving ? 'Đang lưu SQL Server...' : editingItem ? 'Lưu Thay Đổi' : 'Thêm Mặt Hàng'}
             </button>
           </>
         }
       >
         <form id="item-form" onSubmit={handleSubmit} className="space-y-4">
+          {modalError && (
+            <div className="p-3 rounded-xl bg-rose-500/10 text-rose-500 border border-rose-500/20 text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{modalError}</span>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">

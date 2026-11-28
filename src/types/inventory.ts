@@ -91,8 +91,6 @@ export type TabType =
   | 'items'
   | 'stock-in'
   | 'stock-out'
-  | 'stock-lookup'
-  | 'history'
   | 'statistics'
   | 'reports'
   | 'categories'

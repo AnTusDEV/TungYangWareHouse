@@ -9,8 +9,6 @@ import { WarehouseManager } from './components/warehouses/WarehouseManager';
 import { ItemManager } from './components/items/ItemManager';
 import { StockInManager } from './components/stock-in/StockInManager';
 import { StockOutManager } from './components/stock-out/StockOutManager';
-import { StockLookup } from './components/stock-lookup/StockLookup';
-import { TransactionHistory } from './components/history/TransactionHistory';
 import { ReportsView } from './components/reports/ReportsView';
 import { StatisticsView } from './components/statistics/StatisticsView';
 import { CategoryUnitManager } from './components/categories/CategoryUnitManager';
@@ -56,10 +54,6 @@ export default function App() {
         return <StockInManager />;
       case 'stock-out':
         return <StockOutManager />;
-      case 'stock-lookup':
-        return <StockLookup />;
-      case 'history':
-        return <TransactionHistory />;
       case 'statistics':
         return <StatisticsView />;
       case 'reports':

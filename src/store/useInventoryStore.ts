@@ -32,6 +32,8 @@ import {
   deleteUnitFromSQLServer,
   saveVoucherToSQLServer,
   deleteVoucherFromSQLServer,
+  repairVoucherItemsInSQLServer,
+  importItemsBatchToSQLServer,
 } from '../lib/sqlServerSync';
 
 interface InventoryState {
@@ -69,26 +71,36 @@ interface InventoryState {
   logs: InventoryLog[];
 
   // Actions - Warehouses
-  addWarehouse: (wh: Omit<Warehouse, 'id'>) => void;
-  updateWarehouse: (id: string, wh: Partial<Warehouse>) => void;
-  deleteWarehouse: (id: string) => boolean;
+  addWarehouse: (wh: Omit<Warehouse, 'id'>) => Promise<{ success: boolean; message: string }>;
+  updateWarehouse: (id: string, wh: Partial<Warehouse>) => Promise<{ success: boolean; message: string }>;
+  deleteWarehouse: (id: string) => Promise<{ success: boolean; message: string }>;
 
   // Actions - Categories
-  addCategory: (cat: Omit<Category, 'id'>) => void;
-  updateCategory: (id: string, cat: Partial<Category>) => void;
-  deleteCategory: (id: string) => boolean;
+  addCategory: (cat: Omit<Category, 'id'>) => Promise<{ success: boolean; message: string }>;
+  updateCategory: (id: string, cat: Partial<Category>) => Promise<{ success: boolean; message: string }>;
+  deleteCategory: (id: string) => Promise<{ success: boolean; message: string }>;
 
   // Actions - Units
-  addUnit: (unit: Omit<Unit, 'id'>) => void;
-  updateUnit: (id: string, unit: Partial<Unit>) => void;
-  deleteUnit: (id: string) => boolean;
+  addUnit: (unit: Omit<Unit, 'id'>) => Promise<{ success: boolean; message: string }>;
+  updateUnit: (id: string, unit: Partial<Unit>) => Promise<{ success: boolean; message: string }>;
+  deleteUnit: (id: string) => Promise<{ success: boolean; message: string }>;
 
   // Actions - Items
-  addItem: (itemData: Omit<Item, 'id' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string }) => Item;
-  updateItem: (id: string, itemData: Partial<Item>) => void;
-  deleteItem: (id: string) => boolean;
-  importItems: (importedItems: Partial<Item>[]) => { successCount: number; errorCount: number };
-  syncMissingCategoriesFromItems: () => { addedCats: number; addedUnits: number; addedWarehouses: number };
+  addItem: (
+    itemData: Omit<Item, 'id' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string }
+  ) => Promise<{ success: boolean; message: string; item?: Item }>;
+  updateItem: (id: string, itemData: Partial<Item>) => Promise<{ success: boolean; message: string }>;
+  deleteItem: (id: string) => Promise<{ success: boolean; message: string }>;
+  importItems: (
+    importedItems: Partial<Item>[]
+  ) => Promise<{ success: boolean; message: string; successCount: number; errorCount: number }>;
+  syncMissingCategoriesFromItems: () => Promise<{
+    success: boolean;
+    message: string;
+    addedCats: number;
+    addedUnits: number;
+    addedWarehouses: number;
+  }>;
 
   // Actions - Vouchers (Inbound / Outbound)
   createStockInVoucher: (data: {
@@ -98,7 +110,7 @@ interface InventoryState {
     warehouseId: string;
     note?: string;
     items: { itemId: string; quantity: number }[];
-  }) => { success: boolean; message: string; voucher?: StockVoucher };
+  }) => Promise<{ success: boolean; message: string; voucher?: StockVoucher }>;
 
   updateStockInVoucher: (
     id: string,
@@ -110,9 +122,9 @@ interface InventoryState {
       note?: string;
       items: { itemId: string; quantity: number }[];
     }
-  ) => { success: boolean; message: string; voucher?: StockVoucher };
+  ) => Promise<{ success: boolean; message: string; voucher?: StockVoucher }>;
 
-  deleteStockInVoucher: (id: string) => { success: boolean; message: string };
+  deleteStockInVoucher: (id: string) => Promise<{ success: boolean; message: string }>;
 
   createStockOutVoucher: (data: {
     date: string;
@@ -121,9 +133,17 @@ interface InventoryState {
     warehouseId: string;
     note?: string;
     items: { itemId: string; quantity: number }[];
-  }) => { success: boolean; message: string; voucher?: StockVoucher };
+  }) => Promise<{ success: boolean; message: string; voucher?: StockVoucher }>;
 
   deleteVoucher: (id: string) => void;
+
+  syncLocalVouchersToSQLServer: (type?: 'IN' | 'OUT') => Promise<{
+    success: boolean;
+    message: string;
+    syncedCount: number;
+    syncedItemsCount: number;
+    skippedEmptyCount: number;
+  }>;
 
   // Utility
   clearLocalData: () => void;
@@ -253,19 +273,12 @@ export const useInventoryStore = create<InventoryState>()(
             res.warehouses || []
           );
 
-          if (newCats.length > 0) {
-            newCats.forEach((c) => {
-              saveCategoryToSQLServer(config, c);
-            });
-          }
-          if (newUnits.length > 0) {
-            newUnits.forEach((u) => {
-              saveUnitToSQLServer(config, u);
-            });
-          }
-          if (newWhs.length > 0) {
-            newWhs.forEach((w) => {
-              saveWarehouseToSQLServer(config, w);
+          if (newCats.length > 0 || newUnits.length > 0 || newWhs.length > 0) {
+            importItemsBatchToSQLServer(config, {
+              categories: newCats,
+              units: newUnits,
+              warehouses: newWhs,
+              items: [],
             });
           }
 
@@ -276,6 +289,7 @@ export const useInventoryStore = create<InventoryState>()(
           const currentState = get();
           const serverVouchers = res.vouchers || [];
           const currentVouchers = currentState.vouchers;
+          const vouchersToRepairFromLocal: { voucherId: string; items: StockVoucher['items'] }[] = [];
 
           const mergedVouchers = serverVouchers.map((sv) => {
             if (sv.items.length === 0 && currentVouchers.length > 0) {
@@ -283,6 +297,10 @@ export const useInventoryStore = create<InventoryState>()(
                 (v) => v.id === sv.id || v.code === sv.code
               );
               if (existing && existing.items.length > 0) {
+                vouchersToRepairFromLocal.push({
+                  voucherId: sv.id,
+                  items: existing.items,
+                });
                 return {
                   ...sv,
                   items: existing.items,
@@ -293,14 +311,14 @@ export const useInventoryStore = create<InventoryState>()(
             return sv;
           });
 
-          // Merge logs: keep local logs for vouchers that have no matching entry on the server
+          if (vouchersToRepairFromLocal.length > 0) {
+            vouchersToRepairFromLocal.forEach(({ voucherId, items: repairItems }) => {
+              repairVoucherItemsInSQLServer(config, voucherId, repairItems);
+            });
+          }
+
+          // Use authoritative logs directly from SQL Server so deleted records do not persist from localStorage
           const serverLogs = res.logs || [];
-          const currentLogs = currentState.logs;
-          const serverLogVoucherIds = new Set(serverLogs.map((l) => l.voucherId));
-          const extraLocalLogs = currentLogs.filter(
-            (l) => !serverLogVoucherIds.has(l.voucherId)
-          );
-          const mergedLogs = [...serverLogs, ...extraLocalLogs];
 
           set({
             items: rawItems,
@@ -308,7 +326,7 @@ export const useInventoryStore = create<InventoryState>()(
             warehouses,
             units,
             vouchers: mergedVouchers,
-            logs: mergedLogs,
+            logs: serverLogs,
             isSQLServerConnected: true,
             isLoadingFromSQLServer: false,
           });
@@ -379,100 +397,261 @@ export const useInventoryStore = create<InventoryState>()(
       logs: [],
 
       // Warehouses
-      addWarehouse: (whData) => {
+      addWarehouse: async (whData) => {
         const id = `wh-${Date.now()}`;
         const newWh: Warehouse = { ...whData, id };
-        set((state) => ({ warehouses: [...state.warehouses, newWh] }));
-        saveWarehouseToSQLServer(get().sqlServerConfig, newWh);
+        const dbRes = await saveWarehouseToSQLServer(get().sqlServerConfig, newWh);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể lưu kho lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu kho vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+        set((state) => ({
+          warehouses: [...state.warehouses, newWh],
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: `Đã thêm kho "${newWh.name}" vào SQL Server.` };
       },
 
-      updateWarehouse: (id, whData) => {
-        set((state) => {
-          const updatedWhs = state.warehouses.map((w) => (w.id === id ? { ...w, ...whData } : w));
-          const updatedItems = state.items.map((item) =>
-            item.warehouseId === id ? { ...item, warehouseName: whData.name || item.warehouseName } : item
-          );
-          const target = updatedWhs.find((w) => w.id === id);
-          if (target) {
-            saveWarehouseToSQLServer(get().sqlServerConfig, target);
-          }
-          return { warehouses: updatedWhs, items: updatedItems };
-        });
+      updateWarehouse: async (id, whData) => {
+        const state = get();
+        const existing = state.warehouses.find((w) => w.id === id);
+        if (!existing) {
+          return { success: false, message: 'Không tìm thấy kho cần cập nhật' };
+        }
+        const target: Warehouse = { ...existing, ...whData };
+        const dbRes = await saveWarehouseToSQLServer(state.sqlServerConfig, target);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể cập nhật kho lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể cập nhật kho vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
+        set((s) => ({
+          warehouses: s.warehouses.map((w) => (w.id === id ? target : w)),
+          items: s.items.map((item) =>
+            item.warehouseId === id
+              ? { ...item, warehouseName: target.name || item.warehouseName }
+              : item
+          ),
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: `Đã cập nhật kho "${target.name}" vào SQL Server.` };
       },
 
-      deleteWarehouse: (id) => {
+      deleteWarehouse: async (id) => {
         const state = get();
         const hasItems = state.items.some((i) => i.warehouseId === id);
-        if (hasItems) return false;
-        set({ warehouses: state.warehouses.filter((w) => w.id !== id) });
-        deleteWarehouseFromSQLServer(get().sqlServerConfig, id);
-        return true;
+        if (hasItems) {
+          return {
+            success: false,
+            message:
+              'Không thể xóa kho vì đang có hàng hóa lưu trữ bên trong! Vui lòng chuyển hàng hóa sang kho khác trước khi xóa.',
+          };
+        }
+
+        const dbRes = await deleteWarehouseFromSQLServer(state.sqlServerConfig, id);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể xóa kho trên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể xóa kho trên SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
+        set((s) => ({
+          warehouses: s.warehouses.filter((w) => w.id !== id),
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: 'Đã xóa kho khỏi SQL Server.' };
       },
 
       // Categories
-      addCategory: (catData) => {
+      addCategory: async (catData) => {
         const id = `cat-${Date.now()}`;
         const newCat: Category = { ...catData, id };
-        set((state) => ({ categories: [...state.categories, newCat] }));
-        saveCategoryToSQLServer(get().sqlServerConfig, newCat);
+        const dbRes = await saveCategoryToSQLServer(get().sqlServerConfig, newCat);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể lưu nhóm hàng lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu nhóm hàng vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+        set((state) => ({
+          categories: [...state.categories, newCat],
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: `Đã thêm nhóm hàng "${newCat.name}" vào SQL Server.` };
       },
 
-      updateCategory: (id, catData) => {
-        set((state) => {
-          const updatedCats = state.categories.map((c) => (c.id === id ? { ...c, ...catData } : c));
-          const updatedItems = state.items.map((item) =>
-            item.categoryId === id ? { ...item, categoryName: catData.name || item.categoryName } : item
-          );
-          const target = updatedCats.find((c) => c.id === id);
-          if (target) {
-            saveCategoryToSQLServer(get().sqlServerConfig, target);
-          }
-          return { categories: updatedCats, items: updatedItems };
-        });
+      updateCategory: async (id, catData) => {
+        const state = get();
+        const existing = state.categories.find((c) => c.id === id);
+        if (!existing) {
+          return { success: false, message: 'Không tìm thấy nhóm hàng cần cập nhật' };
+        }
+        const target: Category = { ...existing, ...catData };
+        const dbRes = await saveCategoryToSQLServer(state.sqlServerConfig, target);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể cập nhật nhóm hàng lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể cập nhật nhóm hàng vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
+        set((s) => ({
+          categories: s.categories.map((c) => (c.id === id ? target : c)),
+          items: s.items.map((item) =>
+            item.categoryId === id
+              ? { ...item, categoryName: target.name || item.categoryName }
+              : item
+          ),
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: `Đã cập nhật nhóm hàng "${target.name}" vào SQL Server.` };
       },
 
-      deleteCategory: (id) => {
+      deleteCategory: async (id) => {
         const state = get();
         const hasItems = state.items.some((i) => i.categoryId === id);
-        if (hasItems) return false;
-        set({ categories: state.categories.filter((c) => c.id !== id) });
-        deleteCategoryFromSQLServer(get().sqlServerConfig, id);
-        return true;
+        if (hasItems) {
+          return {
+            success: false,
+            message: 'Không thể xóa nhóm hàng vì đang có hàng hóa thuộc nhóm này!',
+          };
+        }
+
+        const dbRes = await deleteCategoryFromSQLServer(state.sqlServerConfig, id);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể xóa nhóm hàng trên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể xóa nhóm hàng trên SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
+        set((s) => ({
+          categories: s.categories.filter((c) => c.id !== id),
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: 'Đã xóa nhóm hàng khỏi SQL Server.' };
       },
 
       // Units
-      addUnit: (unitData) => {
+      addUnit: async (unitData) => {
         const id = `u-${Date.now()}`;
         const newUnit: Unit = { ...unitData, id };
-        set((state) => ({ units: [...state.units, newUnit] }));
-        saveUnitToSQLServer(get().sqlServerConfig, newUnit);
+        const dbRes = await saveUnitToSQLServer(get().sqlServerConfig, newUnit);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể lưu đơn vị tính lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu đơn vị tính vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+        set((state) => ({
+          units: [...state.units, newUnit],
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: `Đã thêm đơn vị tính "${newUnit.name}" vào SQL Server.` };
       },
 
-      updateUnit: (id, unitData) => {
-        set((state) => {
-          const updatedUnits = state.units.map((u) => (u.id === id ? { ...u, ...unitData } : u));
-          const updatedItems = state.items.map((item) =>
-            item.unitId === id ? { ...item, unitName: unitData.name || item.unitName } : item
-          );
-          const target = updatedUnits.find((u) => u.id === id);
-          if (target) {
-            saveUnitToSQLServer(get().sqlServerConfig, target);
-          }
-          return { units: updatedUnits, items: updatedItems };
-        });
+      updateUnit: async (id, unitData) => {
+        const state = get();
+        const existing = state.units.find((u) => u.id === id);
+        if (!existing) {
+          return { success: false, message: 'Không tìm thấy đơn vị tính cần cập nhật' };
+        }
+        const target: Unit = { ...existing, ...unitData };
+        const dbRes = await saveUnitToSQLServer(state.sqlServerConfig, target);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể cập nhật đơn vị tính lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể cập nhật đơn vị tính vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
+        set((s) => ({
+          units: s.units.map((u) => (u.id === id ? target : u)),
+          items: s.items.map((item) =>
+            item.unitId === id ? { ...item, unitName: target.name || item.unitName } : item
+          ),
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: `Đã cập nhật đơn vị tính "${target.name}" vào SQL Server.` };
       },
 
-      deleteUnit: (id) => {
+      deleteUnit: async (id) => {
         const state = get();
         const hasItems = state.items.some((i) => i.unitId === id);
-        if (hasItems) return false;
-        set({ units: state.units.filter((u) => u.id !== id) });
-        deleteUnitFromSQLServer(get().sqlServerConfig, id);
-        return true;
+        if (hasItems) {
+          return {
+            success: false,
+            message: 'Không thể xóa đơn vị tính vì đang được sử dụng bởi các mặt hàng!',
+          };
+        }
+
+        const dbRes = await deleteUnitFromSQLServer(state.sqlServerConfig, id);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể xóa đơn vị tính trên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể xóa đơn vị tính trên SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
+        set((s) => ({
+          units: s.units.filter((u) => u.id !== id),
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return { success: true, message: 'Đã xóa đơn vị tính khỏi SQL Server.' };
       },
 
       // Items
-      addItem: (itemData) => {
+      addItem: async (itemData) => {
         const state = get();
         const id = `item-${Date.now()}`;
         const existingCodes = state.items.map((i) => i.code);
@@ -495,13 +674,37 @@ export const useInventoryStore = create<InventoryState>()(
           updatedAt: now,
         };
 
-        set({ items: [newItem, ...state.items] });
-        saveItemToSQLServer(get().sqlServerConfig, newItem);
-        return newItem;
+        const dbRes = await saveItemToSQLServer(state.sqlServerConfig, newItem);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể lưu hàng hóa lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu hàng hóa vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
+        set((s) => ({
+          items: [newItem, ...s.items],
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+        return {
+          success: true,
+          message: `Đã thêm mặt hàng "${newItem.name}" vào SQL Server.`,
+          item: newItem,
+        };
       },
 
-      updateItem: (id, itemData) => {
+      updateItem: async (id, itemData) => {
         const state = get();
+        const existingItem = state.items.find((i) => i.id === id);
+        if (!existingItem) {
+          return { success: false, message: 'Không tìm thấy mặt hàng cần cập nhật' };
+        }
+
         const category = itemData.categoryId
           ? state.categories.find((c) => c.id === itemData.categoryId)
           : undefined;
@@ -510,46 +713,69 @@ export const useInventoryStore = create<InventoryState>()(
           ? state.warehouses.find((w) => w.id === itemData.warehouseId)
           : undefined;
 
-        let updatedItem: Item | undefined;
+        const updatedItem: Item = {
+          ...existingItem,
+          ...itemData,
+          categoryName: category ? category.name : existingItem.categoryName,
+          unitName: unit ? unit.name : existingItem.unitName,
+          warehouseName: warehouse ? warehouse.name : existingItem.warehouseName,
+          updatedAt: new Date().toISOString(),
+        };
+
+        const dbRes = await saveItemToSQLServer(state.sqlServerConfig, updatedItem);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể cập nhật hàng hóa lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể cập nhật hàng hóa vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
 
         set((s) => ({
-          items: s.items.map((item) => {
-            if (item.id !== id) return item;
-            updatedItem = {
-              ...item,
-              ...itemData,
-              categoryName: category ? category.name : item.categoryName,
-              unitName: unit ? unit.name : item.unitName,
-              warehouseName: warehouse ? warehouse.name : item.warehouseName,
-              updatedAt: new Date().toISOString(),
-            };
-            return updatedItem;
-          }),
+          items: s.items.map((item) => (item.id === id ? updatedItem : item)),
+          isSQLServerConnected: true,
+          sqlServerError: null,
         }));
-
-        if (updatedItem) {
-          saveItemToSQLServer(get().sqlServerConfig, updatedItem);
-        }
+        return {
+          success: true,
+          message: `Đã cập nhật mặt hàng "${updatedItem.name}" vào SQL Server.`,
+        };
       },
 
-      deleteItem: (id) => {
+      deleteItem: async (id) => {
+        const dbRes = await deleteItemFromSQLServer(get().sqlServerConfig, id);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể xóa hàng hóa trên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể xóa hàng hóa trên SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
         set((state) => ({
           items: state.items.filter((item) => item.id !== id),
+          isSQLServerConnected: true,
+          sqlServerError: null,
         }));
-        deleteItemFromSQLServer(get().sqlServerConfig, id);
-        return true;
+        return { success: true, message: 'Đã xóa mặt hàng khỏi SQL Server.' };
       },
 
-      importItems: (importedData) => {
+      importItems: async (importedData) => {
         const state = get();
         let successCount = 0;
         let errorCount = 0;
         const newItems: Item[] = [];
         const existingCodes = [...state.items.map((i) => i.code)];
 
-        let currentCategories = [...state.categories];
-        let currentUnits = [...state.units];
-        let currentWarehouses = [...state.warehouses];
+        const currentCategories = [...state.categories];
+        const currentUnits = [...state.units];
+        const currentWarehouses = [...state.warehouses];
 
         const newlyCreatedCats: Category[] = [];
         const newlyCreatedUnits: Unit[] = [];
@@ -578,10 +804,9 @@ export const useInventoryStore = create<InventoryState>()(
             };
             currentCategories.push(cat);
             newlyCreatedCats.push(cat);
-            saveCategoryToSQLServer(get().sqlServerConfig, cat);
           }
-          let catId = cat ? cat.id : currentCategories[0]?.id || '';
-          let catName = cat ? cat.name : currentCategories[0]?.name || '';
+          const catId = cat ? cat.id : currentCategories[0]?.id || '';
+          const catName = cat ? cat.name : currentCategories[0]?.name || '';
 
           // 2. Match or Create Unit
           const rowUnitName = (row.unitName || '').trim();
@@ -596,10 +821,9 @@ export const useInventoryStore = create<InventoryState>()(
             };
             currentUnits.push(unit);
             newlyCreatedUnits.push(unit);
-            saveUnitToSQLServer(get().sqlServerConfig, unit);
           }
-          let unitId = unit ? unit.id : currentUnits[0]?.id || '';
-          let unitName = unit ? unit.name : currentUnits[0]?.name || '';
+          const unitId = unit ? unit.id : currentUnits[0]?.id || '';
+          const unitName = unit ? unit.name : currentUnits[0]?.name || '';
 
           // 3. Match or Create Warehouse
           const rowWhName = (row.warehouseName || '').trim();
@@ -620,10 +844,9 @@ export const useInventoryStore = create<InventoryState>()(
             };
             currentWarehouses.push(wh);
             newlyCreatedWarehouses.push(wh);
-            saveWarehouseToSQLServer(get().sqlServerConfig, wh);
           }
-          let whId = wh ? wh.id : currentWarehouses[0]?.id || '';
-          let whName = wh ? wh.name : currentWarehouses[0]?.name || '';
+          const whId = wh ? wh.id : currentWarehouses[0]?.id || '';
+          const whName = wh ? wh.name : currentWarehouses[0]?.name || '';
 
           // Code generation
           const code = generateItemCode([...existingCodes, ...newItems.map((n) => n.code)]);
@@ -652,31 +875,61 @@ export const useInventoryStore = create<InventoryState>()(
           };
 
           newItems.push(newItem);
-
-          // Save item to SQL Server
-          saveItemToSQLServer(get().sqlServerConfig, newItem);
-
           successCount++;
         });
 
         if (
-          newItems.length > 0 ||
-          newlyCreatedCats.length > 0 ||
-          newlyCreatedUnits.length > 0 ||
-          newlyCreatedWarehouses.length > 0
+          newItems.length === 0 &&
+          newlyCreatedCats.length === 0 &&
+          newlyCreatedUnits.length === 0 &&
+          newlyCreatedWarehouses.length === 0
         ) {
-          set((s) => ({
-            items: [...newItems, ...s.items],
-            categories: currentCategories,
-            units: currentUnits,
-            warehouses: currentWarehouses,
-          }));
+          return {
+            success: false,
+            message: 'Không có dòng dữ liệu hợp lệ nào để import.',
+            successCount: 0,
+            errorCount,
+          };
         }
 
-        return { successCount, errorCount };
+        const dbRes = await importItemsBatchToSQLServer(state.sqlServerConfig, {
+          categories: newlyCreatedCats,
+          units: newlyCreatedUnits,
+          warehouses: newlyCreatedWarehouses,
+          items: newItems,
+        });
+
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể import hàng hóa lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu dữ liệu import vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+            successCount: 0,
+            errorCount,
+          };
+        }
+
+        set((s) => ({
+          items: [...newItems, ...s.items],
+          categories: currentCategories,
+          units: currentUnits,
+          warehouses: currentWarehouses,
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        }));
+
+        return {
+          success: true,
+          message: `Đã import và lưu thành công ${successCount} mặt hàng vào SQL Server.`,
+          successCount,
+          errorCount,
+        };
       },
 
-      syncMissingCategoriesFromItems: () => {
+      syncMissingCategoriesFromItems: async () => {
         const state = get();
         const { categories, units, warehouses, newCats, newUnits, newWhs } = recoverMasterDataFromItems(
           state.items,
@@ -685,20 +938,48 @@ export const useInventoryStore = create<InventoryState>()(
           state.warehouses
         );
 
-        if (newCats.length > 0 || newUnits.length > 0 || newWhs.length > 0) {
-          set({ categories, units, warehouses });
-          newCats.forEach((c) => {
-            saveCategoryToSQLServer(state.sqlServerConfig, c);
-          });
-          newUnits.forEach((u) => {
-            saveUnitToSQLServer(state.sqlServerConfig, u);
-          });
-          newWhs.forEach((w) => {
-            saveWarehouseToSQLServer(state.sqlServerConfig, w);
-          });
+        if (newCats.length === 0 && newUnits.length === 0 && newWhs.length === 0) {
+          return {
+            success: true,
+            message: 'Tất cả nhóm hàng, đơn vị tính và kho đã được đồng bộ đầy đủ từ sản phẩm!',
+            addedCats: 0,
+            addedUnits: 0,
+            addedWarehouses: 0,
+          };
         }
 
+        const dbRes = await importItemsBatchToSQLServer(state.sqlServerConfig, {
+          categories: newCats,
+          units: newUnits,
+          warehouses: newWhs,
+          items: [],
+        });
+
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể đồng bộ danh mục lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu danh mục khôi phục lên SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+            addedCats: 0,
+            addedUnits: 0,
+            addedWarehouses: 0,
+          };
+        }
+
+        set({
+          categories,
+          units,
+          warehouses,
+          isSQLServerConnected: true,
+          sqlServerError: null,
+        });
+
         return {
+          success: true,
+          message: `Đã khôi phục và lưu lên SQL Server: ${newCats.length} nhóm hàng, ${newUnits.length} đơn vị tính, ${newWhs.length} kho.`,
           addedCats: newCats.length,
           addedUnits: newUnits.length,
           addedWarehouses: newWhs.length,
@@ -706,7 +987,7 @@ export const useInventoryStore = create<InventoryState>()(
       },
 
       // Create Inbound Stock Voucher
-      createStockInVoucher: (data) => {
+      createStockInVoucher: async (data) => {
         const state = get();
         if (!data.items || data.items.length === 0) {
           return { success: false, message: 'Vui lòng chọn ít nhất 1 mặt hàng để nhập kho' };
@@ -728,6 +1009,7 @@ export const useInventoryStore = create<InventoryState>()(
         const voucherItems: StockVoucher['items'] = [];
         const newLogs: InventoryLog[] = [];
         const updatedItemsMap = new Map<string, Item>(state.items.map((i) => [i.id, { ...i }]));
+        const changedItemIds = new Set<string>();
 
         for (const line of data.items) {
           const item = updatedItemsMap.get(line.itemId);
@@ -740,6 +1022,7 @@ export const useInventoryStore = create<InventoryState>()(
           const newStock = prevStock + qty;
           item.stockQuantity = newStock;
           item.updatedAt = nowIso;
+          changedItemIds.add(item.id);
 
           totalQty += qty;
 
@@ -793,20 +1076,33 @@ export const useInventoryStore = create<InventoryState>()(
         };
 
         const updatedItemsList = Array.from(updatedItemsMap.values());
+        const changedItemsList = updatedItemsList.filter((i) => changedItemIds.has(i.id));
+
+        const dbRes = await saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, changedItemsList);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể lưu phiếu nhập kho lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu phiếu nhập kho vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
 
         set({
           vouchers: [newVoucher, ...state.vouchers],
           logs: [...newLogs, ...state.logs],
           items: updatedItemsList,
+          isSQLServerConnected: true,
+          sqlServerError: null,
         });
-
-        saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu nhập kho thành công: ${voucherCode}`, voucher: newVoucher };
       },
 
       // Update Inbound Stock Voucher (restricted to 24h)
-      updateStockInVoucher: (id, data) => {
+      updateStockInVoucher: async (id, data) => {
         const state = get();
         const existingVoucher = state.vouchers.find((v) => v.id === id);
         if (!existingVoucher) {
@@ -837,6 +1133,7 @@ export const useInventoryStore = create<InventoryState>()(
 
         const nowIso = new Date().toISOString();
         const updatedItemsMap = new Map<string, Item>(state.items.map((i) => [i.id, { ...i }]));
+        const changedItemIds = new Set<string>();
 
         // 1. Rollback stock from old voucher items
         for (const oldLine of existingVoucher.items) {
@@ -844,6 +1141,7 @@ export const useInventoryStore = create<InventoryState>()(
           if (item) {
             item.stockQuantity = Math.max(0, item.stockQuantity - oldLine.quantity);
             item.updatedAt = nowIso;
+            changedItemIds.add(item.id);
           }
         }
 
@@ -862,6 +1160,7 @@ export const useInventoryStore = create<InventoryState>()(
           const newStock = prevStock + qty;
           item.stockQuantity = newStock;
           item.updatedAt = nowIso;
+          changedItemIds.add(item.id);
           totalQty += qty;
 
           newVoucherItems.push({
@@ -911,6 +1210,20 @@ export const useInventoryStore = create<InventoryState>()(
         };
 
         const updatedItemsList = Array.from(updatedItemsMap.values());
+        const changedItemsList = updatedItemsList.filter((i) => changedItemIds.has(i.id));
+
+        const dbRes = await saveVoucherToSQLServer(get().sqlServerConfig, updatedVoucher, newLogs, changedItemsList);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể cập nhật phiếu nhập kho lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể cập nhật phiếu nhập kho vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
         const updatedVouchers = state.vouchers.map((v) => (v.id === id ? updatedVoucher : v));
         const filteredLogs = state.logs.filter((l) => l.voucherId !== id);
 
@@ -918,9 +1231,9 @@ export const useInventoryStore = create<InventoryState>()(
           vouchers: updatedVouchers,
           logs: [...newLogs, ...filteredLogs],
           items: updatedItemsList,
+          isSQLServerConnected: true,
+          sqlServerError: null,
         });
-
-        saveVoucherToSQLServer(get().sqlServerConfig, updatedVoucher, newLogs, updatedItemsList);
 
         return {
           success: true,
@@ -930,7 +1243,7 @@ export const useInventoryStore = create<InventoryState>()(
       },
 
       // Delete Inbound Stock Voucher (restricted to 24h & reverts stock)
-      deleteStockInVoucher: (id) => {
+      deleteStockInVoucher: async (id) => {
         const state = get();
         const existingVoucher = state.vouchers.find((v) => v.id === id);
         if (!existingVoucher) {
@@ -952,6 +1265,7 @@ export const useInventoryStore = create<InventoryState>()(
 
         const nowIso = new Date().toISOString();
         const updatedItemsMap = new Map<string, Item>(state.items.map((i) => [i.id, { ...i }]));
+        const changedItemIds = new Set<string>();
 
         // Revert stock added by this voucher
         for (const line of existingVoucher.items) {
@@ -959,10 +1273,25 @@ export const useInventoryStore = create<InventoryState>()(
           if (item) {
             item.stockQuantity = Math.max(0, item.stockQuantity - line.quantity);
             item.updatedAt = nowIso;
+            changedItemIds.add(item.id);
           }
         }
 
         const updatedItemsList = Array.from(updatedItemsMap.values());
+        const changedItemsList = updatedItemsList.filter((i) => changedItemIds.has(i.id));
+
+        const dbRes = await deleteVoucherFromSQLServer(get().sqlServerConfig, id, changedItemsList);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể xóa phiếu nhập kho trên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể xóa phiếu nhập kho trên SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
+
         const updatedVouchers = state.vouchers.filter((v) => v.id !== id);
         const updatedLogs = state.logs.filter((l) => l.voucherId !== id);
 
@@ -970,9 +1299,9 @@ export const useInventoryStore = create<InventoryState>()(
           vouchers: updatedVouchers,
           logs: updatedLogs,
           items: updatedItemsList,
+          isSQLServerConnected: true,
+          sqlServerError: null,
         });
-
-        deleteVoucherFromSQLServer(get().sqlServerConfig, id, updatedItemsList);
 
         return {
           success: true,
@@ -981,7 +1310,7 @@ export const useInventoryStore = create<InventoryState>()(
       },
 
       // Create Outbound Stock Voucher with STRICT stock check
-      createStockOutVoucher: (data) => {
+      createStockOutVoucher: async (data) => {
         const state = get();
         if (!data.items || data.items.length === 0) {
           return { success: false, message: 'Vui lòng chọn ít nhất 1 mặt hàng để xuất kho' };
@@ -1017,6 +1346,7 @@ export const useInventoryStore = create<InventoryState>()(
         const voucherItems: StockVoucher['items'] = [];
         const newLogs: InventoryLog[] = [];
         const updatedItemsMap = new Map<string, Item>(state.items.map((i) => [i.id, { ...i }]));
+        const changedItemIds = new Set<string>();
 
         for (const line of data.items) {
           const item = updatedItemsMap.get(line.itemId)!;
@@ -1027,6 +1357,7 @@ export const useInventoryStore = create<InventoryState>()(
           const newStock = prevStock - qty;
           item.stockQuantity = newStock;
           item.updatedAt = nowIso;
+          changedItemIds.add(item.id);
 
           totalQty += qty;
 
@@ -1060,6 +1391,10 @@ export const useInventoryStore = create<InventoryState>()(
           });
         }
 
+        if (voucherItems.length === 0) {
+          return { success: false, message: 'Số lượng xuất phải lớn hơn 0' };
+        }
+
         const newVoucher: StockVoucher = {
           id: voucherId,
           code: voucherCode,
@@ -1076,14 +1411,27 @@ export const useInventoryStore = create<InventoryState>()(
         };
 
         const updatedItemsList = Array.from(updatedItemsMap.values());
+        const changedItemsList = updatedItemsList.filter((i) => changedItemIds.has(i.id));
+
+        const dbRes = await saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, changedItemsList);
+        if (!dbRes.success) {
+          set({
+            isSQLServerConnected: false,
+            sqlServerError: dbRes.message || 'Không thể lưu phiếu xuất kho lên SQL Server',
+          });
+          return {
+            success: false,
+            message: `Không thể lưu phiếu xuất kho vào SQL Server: ${dbRes.message || 'Lỗi kết nối cơ sở dữ liệu'}`,
+          };
+        }
 
         set({
           vouchers: [newVoucher, ...state.vouchers],
           logs: [...newLogs, ...state.logs],
           items: updatedItemsList,
+          isSQLServerConnected: true,
+          sqlServerError: null,
         });
-
-        saveVoucherToSQLServer(get().sqlServerConfig, newVoucher, newLogs, updatedItemsList);
 
         return { success: true, message: `Lưu phiếu xuất kho thành công: ${voucherCode}`, voucher: newVoucher };
       },
@@ -1092,6 +1440,164 @@ export const useInventoryStore = create<InventoryState>()(
         set((state) => ({
           vouchers: state.vouchers.filter((v) => v.id !== id),
         }));
+      },
+
+      syncLocalVouchersToSQLServer: async (type) => {
+        const state = get();
+        const config = state.sqlServerConfig;
+        const targetVouchers = type
+          ? state.vouchers.filter((v) => v.type === type)
+          : state.vouchers;
+
+        if (targetVouchers.length === 0) {
+          return {
+            success: false,
+            message: 'Không có phiếu nào trong bộ nhớ để đồng bộ lên SQL Server.',
+            syncedCount: 0,
+            syncedItemsCount: 0,
+            skippedEmptyCount: 0,
+          };
+        }
+
+        let syncedCount = 0;
+        let syncedItemsCount = 0;
+        let skippedEmptyCount = 0;
+        const failedCodes: string[] = [];
+        let lastErrorMessage = '';
+
+        for (const v of targetVouchers) {
+          const matchingLogs = state.logs.filter(
+            (l) => l.voucherId === v.id || (v.code && l.voucherCode === v.code)
+          );
+
+          const effectiveItems =
+            v.items && v.items.length > 0
+              ? v.items
+              : matchingLogs.map((l) => {
+                  const matchedItem = state.items.find(
+                    (i) => i.id === l.itemId || i.code === l.itemCode
+                  );
+                  return {
+                    itemId: l.itemId,
+                    itemCode: l.itemCode,
+                    itemName: l.itemName,
+                    unitName: matchedItem?.unitName || '',
+                    quantity: l.quantity,
+                    currentStock: l.newStock,
+                  };
+                });
+
+          if (effectiveItems.length === 0) {
+            skippedEmptyCount++;
+            continue;
+          }
+
+          const computedTotalQty = effectiveItems.reduce(
+            (sum, li) => sum + (Number(li.quantity) || 0),
+            0
+          );
+
+          const voucherPayload: StockVoucher = {
+            ...v,
+            items: effectiveItems,
+            totalQuantity: v.totalQuantity || computedTotalQty,
+          };
+
+          const logsToSave: InventoryLog[] =
+            matchingLogs.length > 0
+              ? matchingLogs.map((l) => ({
+                  ...l,
+                  voucherId: v.id,
+                  voucherCode: v.code,
+                }))
+              : effectiveItems.map((line, idx) => {
+                  const matchedItem = state.items.find(
+                    (i) => i.id === line.itemId || i.code === line.itemCode
+                  );
+                  const currentStockVal =
+                    Number(line.currentStock) || matchedItem?.stockQuantity || 0;
+                  const qtyVal = Number(line.quantity) || 0;
+                  const prevStockVal =
+                    v.type === 'IN'
+                      ? Math.max(0, currentStockVal - qtyVal)
+                      : currentStockVal + qtyVal;
+                  return {
+                    id: `log-sync-${v.id}-${idx}`,
+                    voucherId: v.id,
+                    voucherCode: v.code,
+                    type: v.type,
+                    date: v.date,
+                    itemId: line.itemId,
+                    itemCode: line.itemCode,
+                    itemName: line.itemName,
+                    categoryName: matchedItem?.categoryName || '',
+                    warehouseId: v.warehouseId,
+                    warehouseName: v.warehouseName,
+                    quantity: qtyVal,
+                    previousStock: prevStockVal,
+                    newStock: currentStockVal,
+                    person: v.person,
+                    department: v.department,
+                    note: v.note || (v.type === 'IN' ? 'Nhập kho' : 'Xuất kho'),
+                  };
+                });
+
+          // Pass updatedItems = [] so existing stock quantities in SQL Server are NOT modified again
+          const res = await saveVoucherToSQLServer(config, voucherPayload, logsToSave, []);
+          if (!res.success) {
+            failedCodes.push(v.code || v.id);
+            lastErrorMessage = res.message || 'Lỗi kết nối SQL Server';
+            // If first call fails due to DB connection error, stop early instead of repeating timeouts
+            if (syncedCount === 0 && failedCodes.length === 1) {
+              set({
+                isSQLServerConnected: false,
+                sqlServerError: lastErrorMessage,
+              });
+              return {
+                success: false,
+                message: `Không thể đồng bộ lên SQL Server: ${lastErrorMessage}`,
+                syncedCount: 0,
+                syncedItemsCount: 0,
+                skippedEmptyCount,
+              };
+            }
+          } else {
+            syncedCount++;
+            syncedItemsCount += effectiveItems.length;
+          }
+        }
+
+        if (syncedCount === 0) {
+          return {
+            success: false,
+            message:
+              failedCodes.length > 0
+                ? `Đồng bộ thất bại (${failedCodes.length} phiếu): ${lastErrorMessage}`
+                : 'Các phiếu hiện có chưa có dữ liệu chi tiết mặt hàng ở máy này để đồng bộ.',
+            syncedCount: 0,
+            syncedItemsCount: 0,
+            skippedEmptyCount,
+          };
+        }
+
+        await get().fetchFromSQLServer();
+
+        const extraNote =
+          skippedEmptyCount > 0
+            ? ` (Bỏ qua ${skippedEmptyCount} phiếu không có chi tiết ở máy hiện tại)`
+            : '';
+        const failNote =
+          failedCodes.length > 0
+            ? ` | Lỗi ${failedCodes.length} phiếu: ${failedCodes.join(', ')}`
+            : '';
+
+        return {
+          success: failedCodes.length === 0,
+          message: `Đã đồng bộ thành công ${syncedCount} phiếu (${syncedItemsCount} dòng chi tiết) lên SQL Server${extraNote}${failNote}.`,
+          syncedCount,
+          syncedItemsCount,
+          skippedEmptyCount,
+        };
       },
 
       clearLocalData: () => {

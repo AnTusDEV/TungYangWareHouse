@@ -8,6 +8,7 @@ export interface SQLServerConfig {
   password?: string;
   database: string;
   encrypt?: boolean;
+  isCustom?: boolean;
 }
 
 export const DEFAULT_SQLSERVER_CONFIG: SQLServerConfig = {
@@ -31,6 +32,14 @@ export function getStoredSQLServerConfig(): SQLServerConfig {
     console.error('Failed to parse saved SQL Server config', e);
   }
   return DEFAULT_SQLSERVER_CONFIG;
+}
+
+export function hasCustomSQLServerConfig(): boolean {
+  try {
+    return Boolean(localStorage.getItem(CONFIG_STORAGE_KEY));
+  } catch {
+    return false;
+  }
 }
 
 export function saveStoredSQLServerConfig(config: SQLServerConfig) {
@@ -88,12 +97,20 @@ export async function initSQLServerTables(config: SQLServerConfig): Promise<{ su
   }
 }
 
+function withConfigMeta(config: SQLServerConfig): SQLServerConfig {
+  return {
+    ...config,
+    isCustom: config?.isCustom !== undefined ? config.isCustom : hasCustomSQLServerConfig(),
+  };
+}
+
 export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQLServerSyncResult> {
   try {
+    const effectiveConfig = withConfigMeta(config);
     const res = await fetch('/api/mssql/fetch-all', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
+      body: JSON.stringify(effectiveConfig),
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
@@ -164,18 +181,29 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
       note: String(row.note || ''),
     }));
 
+    const getRowField = (row: any, candidates: string[], fallback: any = '') => {
+      for (const c of candidates) {
+        if (row[c] !== undefined && row[c] !== null) return row[c];
+        const keyInsensitive = Object.keys(row).find((k) => k.toLowerCase() === c.toLowerCase());
+        if (keyInsensitive && row[keyInsensitive] !== undefined && row[keyInsensitive] !== null) {
+          return row[keyInsensitive];
+        }
+      }
+      return fallback;
+    };
+
     const rawVoucherItemsMap = new Map<string, any[]>();
     (data.voucherItems || []).forEach((row: any) => {
-      const voucherId = String(row.voucher_id || '').trim();
+      const voucherId = String(getRowField(row, ['voucher_id', 'voucherId'], '')).trim();
       if (!voucherId) return;
       const list = rawVoucherItemsMap.get(voucherId) || [];
       list.push({
-        itemId: String(row.item_id || '').trim(),
-        itemCode: String(row.item_code || '').trim(),
-        itemName: String(row.item_name || ''),
-        unitName: String(row.unit_name || ''),
-        quantity: Number(row.quantity) || 0,
-        currentStock: Number(row.current_stock) || 0,
+        itemId: String(getRowField(row, ['item_id', 'itemId'], '')).trim(),
+        itemCode: String(getRowField(row, ['item_code', 'itemCode'], '')).trim(),
+        itemName: String(getRowField(row, ['item_name', 'itemName'], '')),
+        unitName: String(getRowField(row, ['unit_name', 'unitName'], '')),
+        quantity: Number(getRowField(row, ['quantity'], 0)) || 0,
+        currentStock: Number(getRowField(row, ['current_stock', 'currentStock'], 0)) || 0,
       });
       rawVoucherItemsMap.set(voucherId, list);
     });
@@ -277,7 +305,7 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
         fetch('/api/mssql/repair-voucher-items', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ config, voucherId, items: repairItems }),
+          body: JSON.stringify({ config: effectiveConfig, voucherId, items: repairItems }),
         }).catch(() => {
           // silent — repair is best-effort, never breaks UI
         });
@@ -299,60 +327,84 @@ export async function fetchAllFromSQLServer(config: SQLServerConfig): Promise<SQ
   }
 }
 
-async function postToSQLServer(endpoint: string, payload: unknown, actionLabel: string) {
+export interface SQLServerActionResult {
+  success: boolean;
+  message?: string;
+  insertedItems?: number;
+}
+
+async function postToSQLServer(
+  endpoint: string,
+  payload: Record<string, unknown>,
+  actionLabel: string
+): Promise<SQLServerActionResult> {
   try {
+    const bodyPayload =
+      payload && typeof payload === 'object' && 'config' in payload && payload.config
+        ? { ...payload, config: withConfigMeta(payload.config as SQLServerConfig) }
+        : payload;
+
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(bodyPayload),
     });
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      console.error(`Failed to ${actionLabel} on SQL Server:`, errBody.message || res.statusText);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.success === false) {
+      const msg = data?.message || res.statusText || 'Lỗi lưu dữ liệu lên SQL Server';
+      console.error(`Failed to ${actionLabel} on SQL Server:`, msg);
+      return { success: false, message: msg };
     }
-  } catch (err) {
+    return {
+      success: true,
+      message: data?.message,
+      insertedItems: typeof data?.insertedItems === 'number' ? data.insertedItems : undefined,
+    };
+  } catch (err: any) {
+    const msg = err?.message || 'Không thể kết nối tới máy chủ để lưu SQL Server';
     console.error(`Failed to ${actionLabel} on SQL Server`, err);
+    return { success: false, message: msg };
   }
 }
 
 export async function saveUserToSQLServer(config: SQLServerConfig, user: User, passwordHash?: string) {
-  await postToSQLServer('/api/mssql/save-user', { config, user, passwordHash }, 'sync user');
+  return postToSQLServer('/api/mssql/save-user', { config, user, passwordHash }, 'sync user');
 }
 
 export async function deleteUserFromSQLServer(config: SQLServerConfig, id: string) {
-  await postToSQLServer('/api/mssql/delete-user', { config, id }, 'delete user');
+  return postToSQLServer('/api/mssql/delete-user', { config, id }, 'delete user');
 }
 
 export async function saveItemToSQLServer(config: SQLServerConfig, item: Item) {
-  await postToSQLServer('/api/mssql/save-item', { config, item }, 'sync item');
+  return postToSQLServer('/api/mssql/save-item', { config, item }, 'sync item');
 }
 
 export async function deleteItemFromSQLServer(config: SQLServerConfig, id: string) {
-  await postToSQLServer('/api/mssql/delete-item', { config, id }, 'delete item');
+  return postToSQLServer('/api/mssql/delete-item', { config, id }, 'delete item');
 }
 
 export async function saveWarehouseToSQLServer(config: SQLServerConfig, warehouse: Warehouse) {
-  await postToSQLServer('/api/mssql/save-warehouse', { config, warehouse }, 'sync warehouse');
+  return postToSQLServer('/api/mssql/save-warehouse', { config, warehouse }, 'sync warehouse');
 }
 
 export async function deleteWarehouseFromSQLServer(config: SQLServerConfig, id: string) {
-  await postToSQLServer('/api/mssql/delete-warehouse', { config, id }, 'delete warehouse');
+  return postToSQLServer('/api/mssql/delete-warehouse', { config, id }, 'delete warehouse');
 }
 
 export async function saveCategoryToSQLServer(config: SQLServerConfig, category: Category) {
-  await postToSQLServer('/api/mssql/save-category', { config, category }, 'sync category');
+  return postToSQLServer('/api/mssql/save-category', { config, category }, 'sync category');
 }
 
 export async function deleteCategoryFromSQLServer(config: SQLServerConfig, id: string) {
-  await postToSQLServer('/api/mssql/delete-category', { config, id }, 'delete category');
+  return postToSQLServer('/api/mssql/delete-category', { config, id }, 'delete category');
 }
 
 export async function saveUnitToSQLServer(config: SQLServerConfig, unit: Unit) {
-  await postToSQLServer('/api/mssql/save-unit', { config, unit }, 'sync unit');
+  return postToSQLServer('/api/mssql/save-unit', { config, unit }, 'sync unit');
 }
 
 export async function deleteUnitFromSQLServer(config: SQLServerConfig, id: string) {
-  await postToSQLServer('/api/mssql/delete-unit', { config, id }, 'delete unit');
+  return postToSQLServer('/api/mssql/delete-unit', { config, id }, 'delete unit');
 }
 
 export async function saveVoucherToSQLServer(
@@ -360,14 +412,42 @@ export async function saveVoucherToSQLServer(
   voucher: StockVoucher,
   logs: InventoryLog[],
   updatedItems: Item[]
-) {
-  await postToSQLServer('/api/mssql/save-voucher', { config, voucher, logs, updatedItems }, 'sync voucher');
+): Promise<SQLServerActionResult> {
+  return postToSQLServer('/api/mssql/save-voucher', { config, voucher, logs, updatedItems }, 'sync voucher');
 }
 
 export async function deleteVoucherFromSQLServer(
   config: SQLServerConfig,
   id: string,
   updatedItems: Item[]
-) {
-  await postToSQLServer('/api/mssql/delete-voucher', { config, id, updatedItems }, 'delete voucher');
+): Promise<SQLServerActionResult> {
+  return postToSQLServer('/api/mssql/delete-voucher', { config, id, updatedItems }, 'delete voucher');
+}
+
+export async function repairVoucherItemsInSQLServer(
+  config: SQLServerConfig,
+  voucherId: string,
+  items: StockVoucher['items']
+): Promise<SQLServerActionResult> {
+  return postToSQLServer(
+    '/api/mssql/repair-voucher-items',
+    { config, voucherId, items },
+    'repair voucher items'
+  );
+}
+
+export async function importItemsBatchToSQLServer(
+  config: SQLServerConfig,
+  payload: {
+    categories?: Category[];
+    units?: Unit[];
+    warehouses?: Warehouse[];
+    items?: Item[];
+  }
+): Promise<SQLServerActionResult> {
+  return postToSQLServer(
+    '/api/mssql/import-items-batch',
+    { config, ...payload },
+    'import items batch'
+  );
 }

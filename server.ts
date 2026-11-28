@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -38,56 +39,76 @@ function hashPasswordIfNeeded(pass: string): string {
 }
 
 function mapDbRowToUser(row: any): ServerUser {
+  const isLocked =
+    String(row.status || '').trim().toLowerCase() === 'locked' ||
+    row.is_active === false ||
+    row.is_active === 0 ||
+    String(row.is_active || '').trim().toLowerCase() === 'false';
+
   return {
-    id: String(row.id),
-    username: String(row.username),
-    passwordHash: String(row.password_hash || row.password || ''),
+    id: String(row.id || '').trim(),
+    username: String(row.username || '').trim(),
+    passwordHash: String(row.password_hash || row.password || '').trim(),
     fullName: String(row.full_name || row.fullName || ''),
     position: String(row.position || ''),
     notes: String(row.notes || ''),
-    role: row.role === 'admin' ? 'admin' : 'user',
-    status: row.status === 'locked' ? 'locked' : 'active',
+    role: String(row.role || '').trim().toLowerCase() === 'admin' ? 'admin' : 'user',
+    status: isLocked ? 'locked' : 'active',
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
   };
 }
 
-// In-memory fallback users when external SQL Server is unreachable (e.g. cloud preview)
-const fallbackUsers: ServerUser[] = [
-  {
-    id: 'usr_admin',
-    username: 'admin',
-    passwordHash: bcrypt.hashSync('admin123', 10),
-    fullName: 'Quản Trị Viên Hệ Thống',
-    position: 'Quản trị viên',
-    notes: 'Tài khoản quản trị cao nhất hệ thống',
-    role: 'admin',
-    status: 'active',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'usr_nhanvien',
-    username: 'nhanvien',
-    passwordHash: bcrypt.hashSync('user123', 10),
-    fullName: 'Nguyễn Văn Kho',
-    position: 'Thủ kho',
-    notes: 'Tài khoản nhân viên vận hành kho',
-    role: 'user',
-    status: 'active',
-    createdAt: new Date().toISOString(),
-  },
-];
-
-async function getDbClient(): Promise<mssql.ConnectionPool | null> {
-  if (!process.env.MSSQL_HOST) {
-    return null;
+class DbConnectionError extends Error {
+  statusCode = 503;
+  constructor(message: string) {
+    super(message);
+    this.name = 'DbConnectionError';
   }
-  try {
-    const pool = await getMSSQLPool({}, true);
-    if (pool) return pool;
-  } catch (e) { }
+}
 
-  return null;
+function extractMssqlConfig(req: express.Request): any {
+  if (req.body && typeof req.body === 'object' && req.body.config) {
+    return req.body.config;
+  }
+  const headerRaw = req.headers['x-mssql-config'];
+  if (typeof headerRaw === 'string' && headerRaw.trim()) {
+    try {
+      return JSON.parse(decodeURIComponent(headerRaw));
+    } catch {
+      try {
+        return JSON.parse(headerRaw);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function getDbClient(config?: any): Promise<mssql.ConnectionPool> {
+  const useCustom = Boolean(config?.isCustom && config?.host);
+  const effectiveConfig = useCustom
+    ? config
+    : process.env.MSSQL_HOST
+      ? {}
+      : (config || {});
+
+  const targetHost = effectiveConfig?.host || process.env.MSSQL_HOST || 'SERVER_LAN';
+  const targetPort = Number(effectiveConfig?.port || process.env.MSSQL_PORT || 1433);
+  const targetDb = effectiveConfig?.database || process.env.MSSQL_DATABASE || 'inventory_db_test';
+
+  if (!targetHost) {
+    throw new DbConnectionError('Chưa cấu hình máy chủ cơ sở dữ liệu SQL Server.');
+  }
+
+  try {
+    return await getMSSQLPool(effectiveConfig, true);
+  } catch (err: any) {
+    throw new DbConnectionError(
+      `Không thể kết nối tới cơ sở dữ liệu SQL Server (${targetHost}:${targetPort}/${targetDb}): ${err?.message || 'Lỗi kết nối'}`
+    );
+  }
 }
 
 async function ensureUsersTable(pool: mssql.ConnectionPool) {
@@ -108,93 +129,65 @@ async function ensureUsersTable(pool: mssql.ConnectionPool) {
       );
     END
 
-    IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password')
-      ALTER TABLE users ALTER COLUMN password NVARCHAR(255) NULL;
+    BEGIN TRY
+      IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password')
+        ALTER TABLE users ALTER COLUMN password NVARCHAR(255) NULL;
 
-    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password_hash')
-      ALTER TABLE users ADD password_hash NVARCHAR(255) NULL;
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'password_hash')
+        ALTER TABLE users ADD password_hash NVARCHAR(255) NULL;
 
-    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'role')
-      ALTER TABLE users ADD role VARCHAR(20) DEFAULT 'user';
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'role')
+        ALTER TABLE users ADD role VARCHAR(20) DEFAULT 'user';
 
-    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'status')
-      ALTER TABLE users ADD status VARCHAR(20) DEFAULT 'active';
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'status')
+        ALTER TABLE users ADD status VARCHAR(20) DEFAULT 'active';
+    END TRY
+    BEGIN CATCH
+    END CATCH
   `);
-
-  const res = await pool.request().query('SELECT COUNT(*) as cnt FROM users');
-  if (res.recordset && res.recordset[0] && Number(res.recordset[0].cnt) === 0) {
-    const defaultAdminHash = bcrypt.hashSync('admin123', 10);
-    const defaultUserHash = bcrypt.hashSync('user123', 10);
-    const req = pool.request();
-    req.input('adminHash', mssql.NVarChar(255), defaultAdminHash);
-    req.input('userHash', mssql.NVarChar(255), defaultUserHash);
-    await req.query(`
-      INSERT INTO users (id, username, password_hash, full_name, position, notes, role, status, created_at)
-      VALUES 
-        ('usr_admin', 'admin', @adminHash, N'Quản Trị Viên Hệ Thống', N'Quản trị viên', N'Tài khoản quản trị cao nhất hệ thống', 'admin', 'active', GETDATE()),
-        ('usr_nhanvien', 'nhanvien', @userHash, N'Nguyễn Văn Kho', N'Thủ kho', N'Tài khoản nhân viên vận hành kho', 'user', 'active', GETDATE());
-    `);
-  }
 }
 
-async function findUserByUsernameFromDb(username: string): Promise<ServerUser | null> {
+async function findUserByUsernameFromDb(username: string, config?: any): Promise<ServerUser | null> {
   const cleanUsername = username.trim().toLowerCase();
-  const pool = await getDbClient();
-  if (!pool) {
-    return fallbackUsers.find((u) => u.username.toLowerCase() === cleanUsername) || null;
-  }
-
-  await ensureUsersTable(pool);
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const req = pool.request();
     req.input('username', mssql.VarChar(50), cleanUsername);
-    const res = await req.query('SELECT * FROM users WHERE LOWER(username) = @username');
-    await pool.close().catch(() => { });
+    const res = await req.query('SELECT * FROM users WHERE LOWER(LTRIM(RTRIM(username))) = @username');
     if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
     return null;
-  } catch (err) {
+  } finally {
     await pool.close().catch(() => { });
-    throw err;
   }
 }
 
-async function findUserByIdFromDb(userId: string): Promise<ServerUser | null> {
-  const pool = await getDbClient();
-  if (!pool) {
-    return fallbackUsers.find((u) => u.id === userId) || null;
-  }
-
-  await ensureUsersTable(pool);
+async function findUserByIdFromDb(userId: string, config?: any): Promise<ServerUser | null> {
+  const cleanId = String(userId).trim();
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const req = pool.request();
-    req.input('id', mssql.VarChar(50), userId);
-    const res = await req.query('SELECT * FROM users WHERE id = @id');
-    await pool.close().catch(() => { });
+    req.input('id', mssql.VarChar(50), cleanId);
+    const res = await req.query('SELECT * FROM users WHERE LTRIM(RTRIM(id)) = @id');
     if (res.recordset && res.recordset.length > 0) return mapDbRowToUser(res.recordset[0]);
     return null;
-  } catch (err) {
+  } finally {
     await pool.close().catch(() => { });
-    throw err;
   }
 }
 
-async function getAllUsersFromDb(): Promise<ServerUser[]> {
-  const pool = await getDbClient();
-  if (!pool) {
-    return [...fallbackUsers];
-  }
-
-  await ensureUsersTable(pool);
+async function getAllUsersFromDb(config?: any): Promise<ServerUser[]> {
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const res = await pool.request().query('SELECT * FROM users ORDER BY created_at ASC');
-    await pool.close().catch(() => { });
     return (res.recordset || []).map(mapDbRowToUser);
-  } catch (err) {
+  } finally {
     await pool.close().catch(() => { });
-    throw err;
   }
 }
 
@@ -208,47 +201,15 @@ async function saveUserToDb(user: {
   status?: 'active' | 'locked';
   passwordHash?: string;
   password?: string;
-}): Promise<void> {
+}, config?: any): Promise<void> {
   const cleanUsername = user.username.trim().toLowerCase();
   const rawPass = user.passwordHash || user.password;
   const hashToUse = rawPass ? hashPasswordIfNeeded(rawPass) : undefined;
 
-  const pool = await getDbClient();
-  if (!pool) {
-    const idx = fallbackUsers.findIndex((u) => u.id === user.id);
-    const now = new Date().toISOString();
-    if (idx !== -1) {
-      fallbackUsers[idx] = {
-        ...fallbackUsers[idx],
-        username: cleanUsername,
-        fullName: user.fullName,
-        position: user.position || '',
-        notes: user.notes || '',
-        role: user.role || fallbackUsers[idx].role,
-        status: user.status || fallbackUsers[idx].status,
-        ...(hashToUse ? { passwordHash: hashToUse } : {}),
-        updatedAt: now,
-      };
-    } else {
-      fallbackUsers.push({
-        id: user.id,
-        username: cleanUsername,
-        passwordHash: hashToUse || bcrypt.hashSync('12345678', 10),
-        fullName: user.fullName,
-        position: user.position || '',
-        notes: user.notes || '',
-        role: user.role || 'user',
-        status: user.status || 'active',
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    return;
-  }
-
-  await ensureUsersTable(pool);
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const req = pool.request();
     req.input('id', mssql.VarChar(50), user.id);
     req.input('username', mssql.VarChar(50), cleanUsername);
@@ -301,128 +262,94 @@ async function saveUserToDb(user: {
         END
       `);
     }
+  } finally {
     await pool.close().catch(() => { });
-  } catch (err) {
-    await pool.close().catch(() => { });
-    throw err;
   }
 }
 
-async function deleteUserFromDb(userId: string): Promise<void> {
-  const pool = await getDbClient();
-  if (!pool) {
-    const idx = fallbackUsers.findIndex((u) => u.id === userId);
-    if (idx !== -1) fallbackUsers.splice(idx, 1);
-    return;
-  }
-
-  await ensureUsersTable(pool);
+async function deleteUserFromDb(userId: string, config?: any): Promise<void> {
+  const cleanId = String(userId).trim();
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const req = pool.request();
-    req.input('id', mssql.VarChar(50), userId);
-    await req.query('DELETE FROM users WHERE id = @id');
+    req.input('id', mssql.VarChar(50), cleanId);
+    await req.query('DELETE FROM users WHERE LTRIM(RTRIM(id)) = @id');
+  } finally {
     await pool.close().catch(() => { });
-  } catch (err) {
-    await pool.close().catch(() => { });
-    throw err;
   }
 }
 
-async function updateUserPasswordInDb(userId: string, newPasswordPlain: string): Promise<void> {
+async function updateUserPasswordInDb(userId: string, newPasswordPlain: string, config?: any): Promise<void> {
+  const cleanId = String(userId).trim();
   const passwordHash = hashPasswordIfNeeded(newPasswordPlain);
-  const pool = await getDbClient();
-  if (!pool) {
-    const user = fallbackUsers.find((u) => u.id === userId);
-    if (user) {
-      user.passwordHash = passwordHash;
-      user.updatedAt = new Date().toISOString();
-    }
-    return;
-  }
-
-  await ensureUsersTable(pool);
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const req = pool.request();
-    req.input('id', mssql.VarChar(50), userId);
+    req.input('id', mssql.VarChar(50), cleanId);
     req.input('password_hash', mssql.NVarChar(255), passwordHash);
-    await req.query('UPDATE users SET password_hash = @password_hash, updated_at = GETDATE() WHERE id = @id');
+    await req.query('UPDATE users SET password_hash = @password_hash, updated_at = GETDATE() WHERE LTRIM(RTRIM(id)) = @id');
+  } finally {
     await pool.close().catch(() => { });
-  } catch (err) {
-    await pool.close().catch(() => { });
-    throw err;
   }
 }
 
-async function updateUserStatusInDb(userId: string, status: 'active' | 'locked'): Promise<void> {
-  const pool = await getDbClient();
-  if (!pool) {
-    const user = fallbackUsers.find((u) => u.id === userId);
-    if (user) {
-      user.status = status;
-      user.updatedAt = new Date().toISOString();
-    }
-    return;
-  }
-
-  await ensureUsersTable(pool);
+async function updateUserStatusInDb(userId: string, status: 'active' | 'locked', config?: any): Promise<void> {
+  const cleanId = String(userId).trim();
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const req = pool.request();
-    req.input('id', mssql.VarChar(50), userId);
+    req.input('id', mssql.VarChar(50), cleanId);
     req.input('status', mssql.VarChar(20), status);
-    await req.query('UPDATE users SET status = @status, updated_at = GETDATE() WHERE id = @id');
+    req.input('is_active', mssql.Bit, status === 'active' ? 1 : 0);
+    await req.query(`
+      UPDATE users SET status = @status, updated_at = GETDATE() WHERE LTRIM(RTRIM(id)) = @id;
+      IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'users') AND name = N'is_active')
+      BEGIN
+        UPDATE users SET is_active = @is_active WHERE LTRIM(RTRIM(id)) = @id;
+      END
+    `);
+  } finally {
     await pool.close().catch(() => { });
-  } catch (err) {
-    await pool.close().catch(() => { });
-    throw err;
   }
 }
 
-async function updateUserProfileInDb(userId: string, data: { fullName?: string; position?: string; notes?: string; role?: 'admin' | 'user' }): Promise<void> {
-  const pool = await getDbClient();
-  if (!pool) {
-    const user = fallbackUsers.find((u) => u.id === userId);
-    if (user) {
-      if (data.fullName !== undefined) user.fullName = data.fullName;
-      if (data.position !== undefined) user.position = data.position;
-      if (data.notes !== undefined) user.notes = data.notes;
-      if (data.role !== undefined) user.role = data.role;
-      user.updatedAt = new Date().toISOString();
-    }
-    return;
-  }
-
-  await ensureUsersTable(pool);
+async function updateUserProfileInDb(userId: string, data: { fullName?: string; position?: string; notes?: string; role?: 'admin' | 'user' }, config?: any): Promise<void> {
+  const cleanId = String(userId).trim();
+  const pool = await getDbClient(config);
 
   try {
+    await ensureUsersTable(pool);
     const req = pool.request();
-    req.input('id', mssql.VarChar(50), userId);
+    req.input('id', mssql.VarChar(50), cleanId);
     const updates: string[] = ['updated_at = GETDATE()'];
     if (data.fullName !== undefined) { req.input('full_name', mssql.NVarChar(255), data.fullName); updates.push('full_name = @full_name'); }
     if (data.position !== undefined) { req.input('position', mssql.NVarChar(255), data.position); updates.push('position = @position'); }
     if (data.notes !== undefined) { req.input('notes', mssql.NVarChar(mssql.MAX), data.notes); updates.push('notes = @notes'); }
     if (data.role !== undefined) { req.input('role', mssql.VarChar(20), data.role); updates.push('role = @role'); }
 
-    await req.query(`UPDATE users SET ${updates.join(', ')} WHERE id = @id`);
+    await req.query(`UPDATE users SET ${updates.join(', ')} WHERE LTRIM(RTRIM(id)) = @id`);
+  } finally {
     await pool.close().catch(() => { });
-  } catch (err) {
-    await pool.close().catch(() => { });
-    throw err;
   }
 }
 
 // --- AUTH API ROUTES ---
 app.post('/api/auth/login', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ success: false, message: 'Vui lòng nhập đầy đủ tên đăng nhập và mật khẩu' });
     }
 
     const cleanUsername = String(username).trim().toLowerCase();
-    const user = await findUserByUsernameFromDb(cleanUsername);
+    const user = await findUserByUsernameFromDb(cleanUsername, dbConfig);
 
     if (!user) {
       return res.status(400).json({ success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
@@ -433,11 +360,14 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     let isMatch = false;
-    if (user.passwordHash && (user.passwordHash.startsWith('$2a$') || user.passwordHash.startsWith('$2b$'))) {
+    if (
+      user.passwordHash &&
+      (user.passwordHash.startsWith('$2a$') || user.passwordHash.startsWith('$2b$') || user.passwordHash.startsWith('$2y$'))
+    ) {
       isMatch = bcrypt.compareSync(String(password), user.passwordHash);
     } else if (user.passwordHash && user.passwordHash === String(password)) {
       isMatch = true;
-      await updateUserPasswordInDb(user.id, String(password)).catch(() => { });
+      await updateUserPasswordInDb(user.id, String(password), dbConfig).catch(() => { });
     }
 
     if (!isMatch) {
@@ -453,12 +383,13 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Login Error:', err);
-    res.status(500).json({ success: false, message: err.message || 'Lỗi hệ thống khi đăng nhập' });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message || 'Lỗi hệ thống khi đăng nhập' });
   }
 });
 
 app.get('/api/auth/me', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const authHeader = req.headers.authorization;
     if (!authHeader) {
       return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
@@ -471,7 +402,7 @@ app.get('/api/auth/me', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Token không hợp lệ' });
     }
 
-    const user = await findUserByIdFromDb(userId);
+    const user = await findUserByIdFromDb(userId, dbConfig);
 
     if (!user) {
       return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại' });
@@ -483,18 +414,19 @@ app.get('/api/auth/me', async (req, res) => {
 
     res.json({ success: true, user: sanitizeUser(user) });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.put('/api/auth/profile', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { userId, fullName, position, notes } = req.body || {};
     if (!userId) {
       return res.status(400).json({ success: false, message: 'Thiếu thông tin tài khoản' });
     }
 
-    const user = await findUserByIdFromDb(userId);
+    const user = await findUserByIdFromDb(userId, dbConfig);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
@@ -503,9 +435,9 @@ app.put('/api/auth/profile', async (req, res) => {
       fullName: String(fullName || '').trim(),
       position: String(position || '').trim(),
       notes: String(notes || '').trim(),
-    });
+    }, dbConfig);
 
-    const updatedUser = await findUserByIdFromDb(userId);
+    const updatedUser = await findUserByIdFromDb(userId, dbConfig);
 
     res.json({
       success: true,
@@ -513,12 +445,13 @@ app.put('/api/auth/profile', async (req, res) => {
       message: 'Cập nhật thông tin cá nhân thành công',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.put('/api/auth/change-password', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { userId, currentPassword, newPassword, confirmPassword } = req.body || {};
 
     if (!userId || !currentPassword || !newPassword || !confirmPassword) {
@@ -533,7 +466,7 @@ app.put('/api/auth/change-password', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Xác nhận mật khẩu mới không trùng khớp' });
     }
 
-    const user = await findUserByIdFromDb(userId);
+    const user = await findUserByIdFromDb(userId, dbConfig);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
     }
@@ -549,32 +482,34 @@ app.put('/api/auth/change-password', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
     }
 
-    await updateUserPasswordInDb(userId, String(newPassword));
+    await updateUserPasswordInDb(userId, String(newPassword), dbConfig);
 
     res.json({
       success: true,
       message: 'Đổi mật khẩu thành công! Vui lòng đăng nhập lại.',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.get('/api/users', async (req, res) => {
   try {
-    const users = await getAllUsersFromDb();
+    const dbConfig = extractMssqlConfig(req);
+    const users = await getAllUsersFromDb(dbConfig);
 
     res.json({
       success: true,
       users: users.map(sanitizeUser),
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.post('/api/users', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { username, password, fullName, position, notes, role } = req.body || {};
 
     if (!username || !password || !fullName || !position) {
@@ -590,7 +525,7 @@ app.post('/api/users', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Mật khẩu phải từ 8 ký tự trở lên' });
     }
 
-    const existing = await findUserByUsernameFromDb(cleanUsername);
+    const existing = await findUserByUsernameFromDb(cleanUsername, dbConfig);
     if (existing) {
       return res.status(400).json({ success: false, message: 'Tên đăng nhập này đã tồn tại trong hệ thống' });
     }
@@ -607,7 +542,7 @@ app.post('/api/users', async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    await saveUserToDb(newUser);
+    await saveUserToDb(newUser, dbConfig);
 
     res.json({
       success: true,
@@ -615,12 +550,13 @@ app.post('/api/users', async (req, res) => {
       message: 'Tạo tài khoản mới thành công',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.put('/api/users/:id/status', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { id } = req.params;
     const { status } = req.body;
 
@@ -628,13 +564,13 @@ app.put('/api/users/:id/status', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Trạng thái không hợp lệ' });
     }
 
-    const user = await findUserByIdFromDb(id);
+    const user = await findUserByIdFromDb(id, dbConfig);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    await updateUserStatusInDb(id, status);
-    const updatedUser = await findUserByIdFromDb(id);
+    await updateUserStatusInDb(id, status, dbConfig);
+    const updatedUser = await findUserByIdFromDb(id, dbConfig);
 
     res.json({
       success: true,
@@ -642,12 +578,13 @@ app.put('/api/users/:id/status', async (req, res) => {
       message: status === 'locked' ? 'Đã khóa tài khoản' : 'Đã mở khóa tài khoản',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.put('/api/users/:id/reset-password', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { id } = req.params;
     const { newPassword } = req.body;
 
@@ -655,28 +592,29 @@ app.put('/api/users/:id/reset-password', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Mật khẩu mới phải từ 8 ký tự trở lên' });
     }
 
-    const user = await findUserByIdFromDb(id);
+    const user = await findUserByIdFromDb(id, dbConfig);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    await updateUserPasswordInDb(id, String(newPassword));
+    await updateUserPasswordInDb(id, String(newPassword), dbConfig);
 
     res.json({
       success: true,
       message: 'Đặt lại mật khẩu thành công',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.put('/api/users/:id', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { id } = req.params;
     const { fullName, position, notes, role } = req.body;
 
-    const user = await findUserByIdFromDb(id);
+    const user = await findUserByIdFromDb(id, dbConfig);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
@@ -686,9 +624,9 @@ app.put('/api/users/:id', async (req, res) => {
       position: position ? String(position).trim() : undefined,
       notes: notes !== undefined ? String(notes).trim() : undefined,
       role: (role === 'admin' || role === 'user') ? role : undefined,
-    });
+    }, dbConfig);
 
-    const updatedUser = await findUserByIdFromDb(id);
+    const updatedUser = await findUserByIdFromDb(id, dbConfig);
 
     res.json({
       success: true,
@@ -696,23 +634,24 @@ app.put('/api/users/:id', async (req, res) => {
       message: 'Cập nhật thông tin tài khoản thành công',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
 app.delete('/api/users/:id', async (req, res) => {
   try {
+    const dbConfig = extractMssqlConfig(req);
     const { id } = req.params;
-    const user = await findUserByIdFromDb(id);
+    const user = await findUserByIdFromDb(id, dbConfig);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản để xóa' });
     }
 
-    await deleteUserFromDb(id);
+    await deleteUserFromDb(id, dbConfig);
 
     res.json({ success: true, message: 'Xóa tài khoản thành công' });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err?.statusCode || 500).json({ success: false, message: err.message });
   }
 });
 
@@ -726,12 +665,19 @@ function sanitizeIdentifier(name: string): string {
 // ==========================================
 
 async function getMSSQLPool(config: any, includeDatabase = true) {
-  const host = config?.host || process.env.MSSQL_HOST || 'SERVER_LAN';
-  const port = Number(config?.port || process.env.MSSQL_PORT || 1433);
-  const user = config?.user || process.env.MSSQL_USER || 'antu';
-  const password = config?.password !== undefined ? config.password : (process.env.MSSQL_PASSWORD || '');
-  const database = config?.database || process.env.MSSQL_DATABASE || 'inventory_db_test';
-  const encrypt = config?.encrypt === true;
+  const useCustom = Boolean(config?.isCustom && config?.host);
+  const effectiveConfig = useCustom
+    ? config
+    : process.env.MSSQL_HOST
+      ? {}
+      : (config || {});
+
+  const host = effectiveConfig?.host || process.env.MSSQL_HOST || 'SERVER_LAN';
+  const port = Number(effectiveConfig?.port || process.env.MSSQL_PORT || 1433);
+  const user = effectiveConfig?.user || process.env.MSSQL_USER || 'antu';
+  const password = effectiveConfig?.password !== undefined ? effectiveConfig.password : (process.env.MSSQL_PASSWORD || '');
+  const database = effectiveConfig?.database || process.env.MSSQL_DATABASE || 'inventory_db_test';
+  const encrypt = effectiveConfig?.encrypt === true;
 
   const mssqlConfig: mssql.config = {
     server: host,
@@ -760,7 +706,7 @@ async function getMSSQLPool(config: any, includeDatabase = true) {
 app.post('/api/mssql/test', async (req, res) => {
   let pool;
   try {
-    const config = req.body;
+    const config = { ...(req.body || {}), isCustom: true };
     pool = await getMSSQLPool(config, false);
     await pool.request().query('SELECT 1');
 
@@ -800,7 +746,7 @@ app.post('/api/mssql/test', async (req, res) => {
 app.post('/api/mssql/init-tables', async (req, res) => {
   let pool;
   try {
-    const config = req.body;
+    const config = { ...(req.body || {}), isCustom: true };
     const dbName = sanitizeIdentifier(config?.database || 'inventory_db_test');
     pool = await getMSSQLPool(config, false);
 
@@ -1154,20 +1100,23 @@ app.post('/api/mssql/delete-item', async (req, res) => {
   }
 });
 
-// 6. Save Warehouse SQL Server
+// 6. Save Warehouse SQL Server (and cascade renamed warehouse_name to items)
 app.post('/api/mssql/save-warehouse', async (req, res) => {
   let pool;
+  let transaction: mssql.Transaction | undefined;
   try {
     const { config, warehouse } = req.body;
     pool = await getMSSQLPool(config, true);
+    transaction = new mssql.Transaction(pool);
+    await transaction.begin();
 
-    const request = pool.request();
-    request.input('id', mssql.VarChar(50), warehouse.id);
-    request.input('code', mssql.VarChar(50), warehouse.code);
-    request.input('name', mssql.NVarChar(255), warehouse.name);
-    request.input('location', mssql.NVarChar(mssql.MAX), warehouse.location || '');
-    request.input('manager', mssql.NVarChar(255), warehouse.manager || '');
-    request.input('description', mssql.NVarChar(mssql.MAX), warehouse.description || '');
+    const request = new mssql.Request(transaction);
+    request.input('id', mssql.VarChar(50), String(warehouse.id).trim());
+    request.input('code', mssql.VarChar(50), String(warehouse.code || '').trim());
+    request.input('name', mssql.NVarChar(255), String(warehouse.name || ''));
+    request.input('location', mssql.NVarChar(mssql.MAX), String(warehouse.location || ''));
+    request.input('manager', mssql.NVarChar(255), String(warehouse.manager || ''));
+    request.input('description', mssql.NVarChar(mssql.MAX), String(warehouse.description || ''));
     request.input('is_default', mssql.Bit, warehouse.isDefault ? 1 : 0);
 
     await request.query(`
@@ -1182,6 +1131,11 @@ app.post('/api/mssql/save-warehouse', async (req, res) => {
           is_default = @is_default,
           updated_at = GETDATE()
         WHERE id = @id;
+
+        UPDATE items SET
+          warehouse_name = @name,
+          updated_at = GETDATE()
+        WHERE warehouse_id = @id;
       END
       ELSE
       BEGIN
@@ -1190,9 +1144,11 @@ app.post('/api/mssql/save-warehouse', async (req, res) => {
       END
     `);
 
+    await transaction.commit();
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
+    if (transaction) { try { await transaction.rollback(); } catch (_) { } }
     if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
@@ -1215,18 +1171,21 @@ app.post('/api/mssql/delete-warehouse', async (req, res) => {
   }
 });
 
-// 8. Save Category SQL Server
+// 8. Save Category SQL Server (and cascade renamed category_name to items)
 app.post('/api/mssql/save-category', async (req, res) => {
   let pool;
+  let transaction: mssql.Transaction | undefined;
   try {
     const { config, category } = req.body;
     pool = await getMSSQLPool(config, true);
+    transaction = new mssql.Transaction(pool);
+    await transaction.begin();
 
-    const request = pool.request();
-    request.input('id', mssql.VarChar(50), category.id);
-    request.input('code', mssql.VarChar(50), category.code);
-    request.input('name', mssql.NVarChar(255), category.name);
-    request.input('description', mssql.NVarChar(mssql.MAX), category.description || '');
+    const request = new mssql.Request(transaction);
+    request.input('id', mssql.VarChar(50), String(category.id).trim());
+    request.input('code', mssql.VarChar(50), String(category.code || '').trim());
+    request.input('name', mssql.NVarChar(255), String(category.name || ''));
+    request.input('description', mssql.NVarChar(mssql.MAX), String(category.description || ''));
 
     await request.query(`
       IF EXISTS (SELECT 1 FROM categories WHERE id = @id)
@@ -1237,6 +1196,11 @@ app.post('/api/mssql/save-category', async (req, res) => {
           description = @description,
           updated_at = GETDATE()
         WHERE id = @id;
+
+        UPDATE items SET
+          category_name = @name,
+          updated_at = GETDATE()
+        WHERE category_id = @id;
       END
       ELSE
       BEGIN
@@ -1245,9 +1209,11 @@ app.post('/api/mssql/save-category', async (req, res) => {
       END
     `);
 
+    await transaction.commit();
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
+    if (transaction) { try { await transaction.rollback(); } catch (_) { } }
     if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
@@ -1270,17 +1236,20 @@ app.post('/api/mssql/delete-category', async (req, res) => {
   }
 });
 
-// 10. Save Unit SQL Server
+// 10. Save Unit SQL Server (and cascade renamed unit_name to items)
 app.post('/api/mssql/save-unit', async (req, res) => {
   let pool;
+  let transaction: mssql.Transaction | undefined;
   try {
     const { config, unit } = req.body;
     pool = await getMSSQLPool(config, true);
+    transaction = new mssql.Transaction(pool);
+    await transaction.begin();
 
-    const request = pool.request();
-    request.input('id', mssql.VarChar(50), unit.id);
-    request.input('name', mssql.NVarChar(255), unit.name);
-    request.input('description', mssql.NVarChar(mssql.MAX), unit.description || '');
+    const request = new mssql.Request(transaction);
+    request.input('id', mssql.VarChar(50), String(unit.id).trim());
+    request.input('name', mssql.NVarChar(255), String(unit.name || ''));
+    request.input('description', mssql.NVarChar(mssql.MAX), String(unit.description || ''));
 
     await request.query(`
       IF EXISTS (SELECT 1 FROM units WHERE id = @id)
@@ -1289,6 +1258,11 @@ app.post('/api/mssql/save-unit', async (req, res) => {
           name = @name,
           description = @description
         WHERE id = @id;
+
+        UPDATE items SET
+          unit_name = @name,
+          updated_at = GETDATE()
+        WHERE unit_id = @id;
       END
       ELSE
       BEGIN
@@ -1297,9 +1271,11 @@ app.post('/api/mssql/save-unit', async (req, res) => {
       END
     `);
 
+    await transaction.commit();
     await pool.close();
     res.json({ success: true });
   } catch (err: any) {
+    if (transaction) { try { await transaction.rollback(); } catch (_) { } }
     if (pool) { try { await pool.close(); } catch (_) { } }
     res.status(400).json({ success: false, message: err.message });
   }
@@ -1318,6 +1294,110 @@ app.post('/api/mssql/delete-unit', async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     if (pool) { try { await pool.close(); } catch (_) { } }
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 11a. Atomic Batch Import (Categories, Units, Warehouses, Items) SQL Server
+app.post('/api/mssql/import-items-batch', async (req, res) => {
+  let pool;
+  let transaction: mssql.Transaction | undefined;
+  try {
+    const { config, categories = [], units = [], warehouses = [], items = [] } = req.body || {};
+    pool = await getMSSQLPool(config, true);
+    transaction = new mssql.Transaction(pool);
+    await transaction.begin();
+
+    for (const category of categories) {
+      const reqCat = new mssql.Request(transaction);
+      reqCat.input('id', mssql.VarChar(50), String(category.id).trim());
+      reqCat.input('code', mssql.VarChar(50), String(category.code || '').trim());
+      reqCat.input('name', mssql.NVarChar(255), String(category.name || ''));
+      reqCat.input('description', mssql.NVarChar(mssql.MAX), String(category.description || ''));
+      await reqCat.query(`
+        IF NOT EXISTS (SELECT 1 FROM categories WHERE id = @id)
+          INSERT INTO categories (id, code, name, description, created_at, updated_at)
+          VALUES (@id, @code, @name, @description, GETDATE(), GETDATE());
+      `);
+    }
+
+    for (const unit of units) {
+      const reqUnit = new mssql.Request(transaction);
+      reqUnit.input('id', mssql.VarChar(50), String(unit.id).trim());
+      reqUnit.input('name', mssql.NVarChar(255), String(unit.name || ''));
+      reqUnit.input('description', mssql.NVarChar(mssql.MAX), String(unit.description || ''));
+      await reqUnit.query(`
+        IF NOT EXISTS (SELECT 1 FROM units WHERE id = @id)
+          INSERT INTO units (id, name, description, created_at)
+          VALUES (@id, @name, @description, GETDATE());
+      `);
+    }
+
+    for (const wh of warehouses) {
+      const reqWh = new mssql.Request(transaction);
+      reqWh.input('id', mssql.VarChar(50), String(wh.id).trim());
+      reqWh.input('code', mssql.VarChar(50), String(wh.code || '').trim());
+      reqWh.input('name', mssql.NVarChar(255), String(wh.name || ''));
+      reqWh.input('location', mssql.NVarChar(mssql.MAX), String(wh.location || ''));
+      reqWh.input('manager', mssql.NVarChar(255), String(wh.manager || ''));
+      reqWh.input('description', mssql.NVarChar(mssql.MAX), String(wh.description || ''));
+      reqWh.input('is_default', mssql.Bit, wh.isDefault ? 1 : 0);
+      await reqWh.query(`
+        IF NOT EXISTS (SELECT 1 FROM warehouses WHERE id = @id)
+          INSERT INTO warehouses (id, code, name, location, manager, description, is_default, created_at, updated_at)
+          VALUES (@id, @code, @name, @location, @manager, @description, @is_default, GETDATE(), GETDATE());
+      `);
+    }
+
+    for (const item of items) {
+      const reqItem = new mssql.Request(transaction);
+      reqItem.input('id', mssql.VarChar(50), String(item.id).trim());
+      reqItem.input('code', mssql.VarChar(50), String(item.code || '').trim());
+      reqItem.input('name', mssql.NVarChar(255), String(item.name || ''));
+      reqItem.input('category_id', mssql.VarChar(50), String(item.categoryId || '').trim());
+      reqItem.input('category_name', mssql.NVarChar(255), String(item.categoryName || ''));
+      reqItem.input('unit_id', mssql.VarChar(50), String(item.unitId || '').trim());
+      reqItem.input('unit_name', mssql.NVarChar(255), String(item.unitName || ''));
+      reqItem.input('warehouse_id', mssql.VarChar(50), String(item.warehouseId || '').trim());
+      reqItem.input('warehouse_name', mssql.NVarChar(255), String(item.warehouseName || ''));
+      reqItem.input('stock_quantity', mssql.Int, Math.round(Number(item.stockQuantity) || 0));
+      reqItem.input('min_stock_level', mssql.Int, Math.round(Number(item.minStockLevel) || 0));
+      reqItem.input('max_stock_level', mssql.Int, Math.round(Number(item.maxStockLevel) || 100));
+      reqItem.input('note', mssql.NVarChar(mssql.MAX), String(item.note || ''));
+      await reqItem.query(`
+        IF EXISTS (SELECT 1 FROM items WHERE id = @id)
+        BEGIN
+          UPDATE items SET
+            code = @code,
+            name = @name,
+            category_id = @category_id,
+            category_name = @category_name,
+            unit_id = @unit_id,
+            unit_name = @unit_name,
+            warehouse_id = @warehouse_id,
+            warehouse_name = @warehouse_name,
+            stock_quantity = @stock_quantity,
+            min_stock_level = @min_stock_level,
+            max_stock_level = @max_stock_level,
+            note = @note,
+            updated_at = GETDATE()
+          WHERE id = @id;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO items (id, code, name, category_id, category_name, unit_id, unit_name, warehouse_id, warehouse_name, stock_quantity, min_stock_level, max_stock_level, note, created_at, updated_at)
+          VALUES (@id, @code, @name, @category_id, @category_name, @unit_id, @unit_name, @warehouse_id, @warehouse_name, @stock_quantity, @min_stock_level, @max_stock_level, @note, GETDATE(), GETDATE());
+        END
+      `);
+    }
+
+    await transaction.commit();
+    await pool.close();
+    res.json({ success: true, importedItems: items.length });
+  } catch (err: any) {
+    if (transaction) { try { await transaction.rollback(); } catch (_) { } }
+    if (pool) { try { await pool.close(); } catch (_) { } }
+    console.error('SQL Server Import Items Batch Error:', err);
     res.status(400).json({ success: false, message: err.message });
   }
 });
@@ -1407,6 +1487,72 @@ app.post('/api/mssql/delete-department', async (req, res) => {
   }
 });
 
+async function ensureVoucherTables(pool: mssql.ConnectionPool) {
+  await pool.request().query(`
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'stock_vouchers')
+    CREATE TABLE stock_vouchers (
+      id VARCHAR(50) PRIMARY KEY,
+      code VARCHAR(50) NOT NULL,
+      type VARCHAR(10) NOT NULL,
+      date VARCHAR(20) NOT NULL,
+      person NVARCHAR(255),
+      department NVARCHAR(255),
+      warehouse_id VARCHAR(50),
+      warehouse_name NVARCHAR(255),
+      note NVARCHAR(MAX),
+      total_quantity INT DEFAULT 0,
+      created_at DATETIME DEFAULT GETDATE()
+    );
+
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'stock_voucher_items')
+    CREATE TABLE stock_voucher_items (
+      id INT IDENTITY(1,1) PRIMARY KEY,
+      voucher_id VARCHAR(50) NOT NULL,
+      item_id VARCHAR(50) NOT NULL,
+      item_code VARCHAR(50),
+      item_name NVARCHAR(255),
+      unit_name NVARCHAR(255),
+      quantity INT DEFAULT 0,
+      current_stock INT DEFAULT 0
+    );
+
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = N'inventory_logs')
+    CREATE TABLE inventory_logs (
+      id VARCHAR(50) PRIMARY KEY,
+      voucher_id VARCHAR(50) NOT NULL,
+      voucher_code VARCHAR(50) NOT NULL,
+      type VARCHAR(10) NOT NULL,
+      date VARCHAR(20) NOT NULL,
+      item_id VARCHAR(50) NOT NULL,
+      item_code VARCHAR(50),
+      item_name NVARCHAR(255),
+      category_name NVARCHAR(255),
+      warehouse_id VARCHAR(50),
+      warehouse_name NVARCHAR(255),
+      quantity INT DEFAULT 0,
+      previous_stock INT DEFAULT 0,
+      new_stock INT DEFAULT 0,
+      person NVARCHAR(255),
+      department NVARCHAR(255),
+      note NVARCHAR(MAX),
+      created_at DATETIME DEFAULT GETDATE()
+    );
+
+    BEGIN TRY
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'stock_vouchers') AND name = N'department')
+        ALTER TABLE stock_vouchers ADD department NVARCHAR(255) NULL;
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'stock_voucher_items') AND name = N'unit_name')
+        ALTER TABLE stock_voucher_items ADD unit_name NVARCHAR(255) NULL;
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'stock_voucher_items') AND name = N'current_stock')
+        ALTER TABLE stock_voucher_items ADD current_stock INT DEFAULT 0;
+      IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'inventory_logs') AND name = N'department')
+        ALTER TABLE inventory_logs ADD department NVARCHAR(255) NULL;
+    END TRY
+    BEGIN CATCH
+    END CATCH
+  `);
+}
+
 async function insertStockVoucherItems(
   target: mssql.ConnectionPool | mssql.Transaction,
   voucherId: string,
@@ -1417,17 +1563,67 @@ async function insertStockVoucherItems(
   const createReq = () =>
     target instanceof mssql.Transaction ? new mssql.Request(target) : target.request();
 
-  const metaRes = await createReq().query(`
-    SELECT c.is_identity, t.name AS type_name
+  const colsRes = await createReq().query(`
+    SELECT c.name, c.is_identity, t.name AS type_name
     FROM sys.columns c
-    JOIN sys.types t ON c.user_type_id = t.user_type_id
-    WHERE c.object_id = OBJECT_ID(N'stock_voucher_items') AND c.name = N'id'
+    LEFT JOIN sys.types t ON c.user_type_id = t.user_type_id
+    WHERE c.object_id = COALESCE(OBJECT_ID(N'dbo.stock_voucher_items'), OBJECT_ID(N'stock_voucher_items'))
   `);
-  const idMeta = metaRes.recordset?.[0];
+
+  const columnsMap = new Map<string, { name: string; is_identity: boolean; type_name: string }>();
+  for (const row of colsRes.recordset || []) {
+    columnsMap.set(String(row.name).toLowerCase(), {
+      name: String(row.name),
+      is_identity: Boolean(row.is_identity),
+      type_name: String(row.type_name || '').toLowerCase(),
+    });
+  }
+
+  // Fallback / supplement via TDS metadata (works even without VIEW DEFINITION permission or with non-dbo default schema)
+  if (columnsMap.size === 0 || !columnsMap.has('id')) {
+    try {
+      const metaRes = await createReq().query('SELECT TOP 0 * FROM stock_voucher_items');
+      const rsCols = metaRes.recordset?.columns || {};
+      for (const [colKey, colInfo] of Object.entries(rsCols)) {
+        const lower = String(colInfo?.name || colKey).toLowerCase();
+        if (!columnsMap.has(lower)) {
+          let detectedType = '';
+          const rawType: any = colInfo?.type;
+          if (rawType === mssql.Int) detectedType = 'int';
+          else if (rawType === mssql.BigInt) detectedType = 'bigint';
+          else if (rawType === mssql.SmallInt) detectedType = 'smallint';
+          else if (rawType === mssql.TinyInt) detectedType = 'tinyint';
+          else if (rawType === mssql.Decimal) detectedType = 'decimal';
+          else if (rawType === mssql.Numeric) detectedType = 'numeric';
+          else if (rawType === mssql.UniqueIdentifier) detectedType = 'uniqueidentifier';
+          else if (
+            rawType === mssql.VarChar ||
+            rawType === mssql.NVarChar ||
+            rawType === mssql.Char ||
+            rawType === mssql.NChar
+          ) {
+            detectedType = 'varchar';
+          } else if (typeof rawType?.name === 'string') {
+            detectedType = rawType.name.toLowerCase();
+          }
+
+          columnsMap.set(lower, {
+            name: String(colInfo?.name || colKey),
+            is_identity: Boolean(colInfo?.identity),
+            type_name: detectedType,
+          });
+        }
+      }
+    } catch (metaErr) {
+      console.error('[insertStockVoucherItems] Failed to inspect TOP 0 columns:', metaErr);
+    }
+  }
+
+  const idMeta = columnsMap.get('id');
   const hasId = Boolean(idMeta);
   const isIdentity = Boolean(idMeta?.is_identity);
-  const typeName = String(idMeta?.type_name || '').toLowerCase();
-  const isNumericId = ['int', 'bigint', 'smallint', 'tinyint'].includes(typeName);
+  const typeName = idMeta?.type_name || '';
+  const isNumericId = ['int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric'].includes(typeName);
 
   let nextNumericId = 1;
   if (hasId && !isIdentity && isNumericId) {
@@ -1437,40 +1633,54 @@ async function insertStockVoucherItems(
     nextNumericId = Number(maxRes.recordset?.[0]?.maxId || 0) + 1;
   }
 
+  const candidateCols: { key: string; param: string }[] = [
+    { key: 'voucher_id', param: '@voucher_id' },
+    { key: 'item_id', param: '@item_id' },
+    { key: 'item_code', param: '@item_code' },
+    { key: 'item_name', param: '@item_name' },
+    { key: 'unit_name', param: '@unit_name' },
+    { key: 'quantity', param: '@quantity' },
+    { key: 'current_stock', param: '@current_stock' },
+  ];
+
+  const activeCols = candidateCols.filter((c) => columnsMap.size === 0 || columnsMap.has(c.key));
+  const insertColNames = activeCols.map((c) => c.key);
+  const insertParamNames = activeCols.map((c) => c.param);
+
   let inserted = 0;
   for (let i = 0; i < items.length; i++) {
     const vi = items[i];
     const reqItem = createReq();
-    reqItem.input('voucher_id', mssql.VarChar(50), voucherId);
-    reqItem.input('item_id', mssql.VarChar(50), vi.itemId || '');
-    reqItem.input('item_code', mssql.VarChar(50), vi.itemCode || '');
-    reqItem.input('item_name', mssql.NVarChar(255), vi.itemName || '');
-    reqItem.input('unit_name', mssql.NVarChar(255), vi.unitName || '');
-    reqItem.input('quantity', mssql.Int, Number(vi.quantity) || 0);
-    reqItem.input('current_stock', mssql.Int, Number(vi.currentStock) || 0);
+    reqItem.input('voucher_id', mssql.VarChar(50), String(voucherId).trim());
+    reqItem.input('item_id', mssql.VarChar(50), String(vi.itemId || '').trim());
+    reqItem.input('item_code', mssql.VarChar(50), String(vi.itemCode || '').trim());
+    reqItem.input('item_name', mssql.NVarChar(255), String(vi.itemName || ''));
+    reqItem.input('unit_name', mssql.NVarChar(255), String(vi.unitName || ''));
+    reqItem.input('quantity', mssql.Int, Math.round(Number(vi.quantity) || 0));
+    reqItem.input('current_stock', mssql.Int, Math.round(Number(vi.currentStock) || 0));
 
     if (!hasId || isIdentity) {
       await reqItem.query(`
-        INSERT INTO stock_voucher_items (voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
-        VALUES (@voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+        INSERT INTO stock_voucher_items (${insertColNames.join(', ')})
+        VALUES (${insertParamNames.join(', ')});
       `);
     } else if (typeName === 'uniqueidentifier') {
       await reqItem.query(`
-        INSERT INTO stock_voucher_items (id, voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
-        VALUES (NEWID(), @voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+        INSERT INTO stock_voucher_items (id, ${insertColNames.join(', ')})
+        VALUES (NEWID(), ${insertParamNames.join(', ')});
       `);
     } else if (isNumericId) {
       reqItem.input('id', mssql.BigInt, nextNumericId++);
       await reqItem.query(`
-        INSERT INTO stock_voucher_items (id, voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
-        VALUES (@id, @voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+        INSERT INTO stock_voucher_items (id, ${insertColNames.join(', ')})
+        VALUES (@id, ${insertParamNames.join(', ')});
       `);
     } else {
       const strId = `svi_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`;
       reqItem.input('id', mssql.VarChar(50), strId);
       await reqItem.query(`
-        INSERT INTO stock_voucher_items (id, voucher_id, item_id, item_code, item_name, unit_name, quantity, current_stock)
-        VALUES (@id, @voucher_id, @item_id, @item_code, @item_name, @unit_name, @quantity, @current_stock);
+        INSERT INTO stock_voucher_items (id, ${insertColNames.join(', ')})
+        VALUES (@id, ${insertParamNames.join(', ')});
       `);
     }
     inserted++;
@@ -1484,22 +1694,28 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
   let pool;
   let transaction: mssql.Transaction | undefined;
   try {
-    const { config, voucher, logs, updatedItems } = req.body;
+    const { config, voucher, logs, updatedItems } = req.body || {};
+    if (!voucher || !voucher.id) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin phiếu để lưu vào SQL Server' });
+    }
+
     pool = await getMSSQLPool(config, true);
+    await ensureVoucherTables(pool);
+
     transaction = new mssql.Transaction(pool);
     await transaction.begin();
 
     const reqV = new mssql.Request(transaction);
-    reqV.input('id', mssql.VarChar(50), voucher.id);
-    reqV.input('code', mssql.VarChar(50), voucher.code);
-    reqV.input('type', mssql.VarChar(10), voucher.type);
-    reqV.input('date', mssql.VarChar(20), voucher.date);
-    reqV.input('person', mssql.NVarChar(255), voucher.person || '');
-    reqV.input('department', mssql.NVarChar(255), voucher.department || '');
-    reqV.input('warehouse_id', mssql.VarChar(50), voucher.warehouseId || '');
-    reqV.input('warehouse_name', mssql.NVarChar(255), voucher.warehouseName || '');
-    reqV.input('note', mssql.NVarChar(mssql.MAX), voucher.note || '');
-    reqV.input('total_quantity', mssql.Int, voucher.totalQuantity || 0);
+    reqV.input('id', mssql.VarChar(50), String(voucher.id).trim());
+    reqV.input('code', mssql.VarChar(50), String(voucher.code || '').trim());
+    reqV.input('type', mssql.VarChar(10), voucher.type === 'OUT' ? 'OUT' : 'IN');
+    reqV.input('date', mssql.VarChar(20), String(voucher.date || '').trim());
+    reqV.input('person', mssql.NVarChar(255), String(voucher.person || ''));
+    reqV.input('department', mssql.NVarChar(255), String(voucher.department || ''));
+    reqV.input('warehouse_id', mssql.VarChar(50), String(voucher.warehouseId || '').trim());
+    reqV.input('warehouse_name', mssql.NVarChar(255), String(voucher.warehouseName || ''));
+    reqV.input('note', mssql.NVarChar(mssql.MAX), String(voucher.note || ''));
+    reqV.input('total_quantity', mssql.Int, Math.round(Number(voucher.totalQuantity) || 0));
 
     await reqV.query(`
       IF EXISTS (SELECT 1 FROM stock_vouchers WHERE id = @id)
@@ -1525,34 +1741,34 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
 
     // Replace existing voucher line items and logs for this voucher so updates never duplicate rows
     const reqDelItems = new mssql.Request(transaction);
-    reqDelItems.input('voucher_id', mssql.VarChar(50), voucher.id);
+    reqDelItems.input('voucher_id', mssql.VarChar(50), String(voucher.id).trim());
     await reqDelItems.query('DELETE FROM stock_voucher_items WHERE voucher_id = @voucher_id');
 
     const reqDelLogs = new mssql.Request(transaction);
-    reqDelLogs.input('voucher_id', mssql.VarChar(50), voucher.id);
+    reqDelLogs.input('voucher_id', mssql.VarChar(50), String(voucher.id).trim());
     await reqDelLogs.query('DELETE FROM inventory_logs WHERE voucher_id = @voucher_id');
 
-    await insertStockVoucherItems(transaction, voucher.id, voucher.items || []);
+    const insertedItems = await insertStockVoucherItems(transaction, String(voucher.id).trim(), voucher.items || []);
 
     for (const log of logs || []) {
       const reqLog = new mssql.Request(transaction);
-      reqLog.input('id', mssql.VarChar(50), log.id);
-      reqLog.input('voucher_id', mssql.VarChar(50), log.voucherId);
-      reqLog.input('voucher_code', mssql.VarChar(50), log.voucherCode);
-      reqLog.input('type', mssql.VarChar(10), log.type);
-      reqLog.input('date', mssql.VarChar(20), log.date);
-      reqLog.input('item_id', mssql.VarChar(50), log.itemId);
-      reqLog.input('item_code', mssql.VarChar(50), log.itemCode || '');
-      reqLog.input('item_name', mssql.NVarChar(255), log.itemName || '');
-      reqLog.input('category_name', mssql.NVarChar(255), log.categoryName || '');
-      reqLog.input('warehouse_id', mssql.VarChar(50), log.warehouseId || '');
-      reqLog.input('warehouse_name', mssql.NVarChar(255), log.warehouseName || '');
-      reqLog.input('quantity', mssql.Int, log.quantity || 0);
-      reqLog.input('previous_stock', mssql.Int, log.previousStock || 0);
-      reqLog.input('new_stock', mssql.Int, log.newStock || 0);
-      reqLog.input('person', mssql.NVarChar(255), log.person || '');
-      reqLog.input('department', mssql.NVarChar(255), log.department || '');
-      reqLog.input('note', mssql.NVarChar(mssql.MAX), log.note || '');
+      reqLog.input('id', mssql.VarChar(50), String(log.id).trim());
+      reqLog.input('voucher_id', mssql.VarChar(50), String(log.voucherId || voucher.id).trim());
+      reqLog.input('voucher_code', mssql.VarChar(50), String(log.voucherCode || voucher.code || '').trim());
+      reqLog.input('type', mssql.VarChar(10), log.type === 'OUT' ? 'OUT' : 'IN');
+      reqLog.input('date', mssql.VarChar(20), String(log.date || voucher.date || '').trim());
+      reqLog.input('item_id', mssql.VarChar(50), String(log.itemId || '').trim());
+      reqLog.input('item_code', mssql.VarChar(50), String(log.itemCode || '').trim());
+      reqLog.input('item_name', mssql.NVarChar(255), String(log.itemName || ''));
+      reqLog.input('category_name', mssql.NVarChar(255), String(log.categoryName || ''));
+      reqLog.input('warehouse_id', mssql.VarChar(50), String(log.warehouseId || '').trim());
+      reqLog.input('warehouse_name', mssql.NVarChar(255), String(log.warehouseName || ''));
+      reqLog.input('quantity', mssql.Int, Math.round(Number(log.quantity) || 0));
+      reqLog.input('previous_stock', mssql.Int, Math.round(Number(log.previousStock) || 0));
+      reqLog.input('new_stock', mssql.Int, Math.round(Number(log.newStock) || 0));
+      reqLog.input('person', mssql.NVarChar(255), String(log.person || ''));
+      reqLog.input('department', mssql.NVarChar(255), String(log.department || ''));
+      reqLog.input('note', mssql.NVarChar(mssql.MAX), String(log.note || ''));
 
       await reqLog.query(`
         IF EXISTS (SELECT 1 FROM inventory_logs WHERE id = @id)
@@ -1573,8 +1789,8 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
 
     for (const item of updatedItems || []) {
       const reqStock = new mssql.Request(transaction);
-      reqStock.input('id', mssql.VarChar(50), item.id);
-      reqStock.input('stock_quantity', mssql.Int, item.stockQuantity || 0);
+      reqStock.input('id', mssql.VarChar(50), String(item.id).trim());
+      reqStock.input('stock_quantity', mssql.Int, Math.round(Number(item.stockQuantity) || 0));
 
       await reqStock.query(`
         UPDATE items
@@ -1585,7 +1801,7 @@ app.post('/api/mssql/save-voucher', async (req, res) => {
 
     await transaction.commit();
     await pool.close();
-    res.json({ success: true });
+    res.json({ success: true, insertedItems });
   } catch (err: any) {
     if (transaction) { try { await transaction.rollback(); } catch (_) { } }
     if (pool) { try { await pool.close(); } catch (_) { } }
@@ -1604,6 +1820,7 @@ app.post('/api/mssql/repair-voucher-items', async (req, res) => {
     }
 
     pool = await getMSSQLPool(config, true);
+    await ensureVoucherTables(pool);
 
     // Only insert if this voucher truly has no items yet (safe guard)
     const checkReq = pool.request();

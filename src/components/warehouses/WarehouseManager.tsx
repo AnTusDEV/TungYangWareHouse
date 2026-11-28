@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Warehouse as WarehouseIcon, Plus, Edit2, Trash2, MapPin, User, Package, AlertCircle, Eye } from 'lucide-react';
+import { Warehouse as WarehouseIcon, Plus, Edit2, Trash2, MapPin, User, Package, AlertCircle, CheckCircle, Eye } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { Warehouse } from '../../types/inventory';
 import { Modal } from '../common/Modal';
@@ -12,9 +12,11 @@ export function WarehouseManager() {
 
   const [selectedWarehouseModal, setSelectedWarehouseModal] = useState<Warehouse | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [alertInfo, setAlertInfo] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -51,33 +53,73 @@ export function WarehouseManager() {
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     if (!formData.name.trim()) {
       setErrorMessage('Vui lòng nhập tên phòng kho');
       return;
     }
 
-    if (editingWarehouse) {
-      updateWarehouse(editingWarehouse.id, formData);
-    } else {
-      addWarehouse(formData);
-    }
+    setErrorMessage(null);
+    setIsSaving(true);
+    try {
+      const res = editingWarehouse
+        ? await updateWarehouse(editingWarehouse.id, formData)
+        : await addWarehouse(formData);
 
-    setIsModalOpen(false);
+      if (res.success) {
+        setAlertInfo({ type: 'success', message: res.message });
+        setIsModalOpen(false);
+      } else {
+        setErrorMessage(res.message);
+      }
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleConfirmDelete = () => {
-    if (!deletingId) return;
-    const success = deleteWarehouse(deletingId);
-    if (!success) {
-      alert('Không thể xóa kho vì đang có hàng hóa lưu trữ bên trong! Vui lòng chuyển hàng hóa sang kho khác trước khi xóa.');
+  const handleConfirmDelete = async () => {
+    if (!deletingId || isSaving) return;
+    setIsSaving(true);
+    try {
+      const res = await deleteWarehouse(deletingId);
+      setAlertInfo({
+        type: res.success ? 'success' : 'error',
+        message: res.message,
+      });
+      setDeletingId(null);
+    } finally {
+      setIsSaving(false);
     }
-    setDeletingId(null);
   };
 
   return (
     <div className="space-y-6">
+      {alertInfo && (
+        <div
+          className={`p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${alertInfo.type === 'success'
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+            : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+            }`}
+        >
+          <div className="flex items-center gap-2">
+            {alertInfo.type === 'success' ? (
+              <CheckCircle className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="h-4 w-4 shrink-0" />
+            )}
+            <span>{alertInfo.message}</span>
+          </div>
+          <button
+            onClick={() => setAlertInfo(null)}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Header Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -204,17 +246,19 @@ export function WarehouseManager() {
           <>
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => setIsModalOpen(false)}
-              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
             >
               Hủy
             </button>
             <button
               type="submit"
               form="warehouse-form"
-              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow-sm transition-colors"
+              disabled={isSaving}
+              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow-sm transition-colors disabled:opacity-60"
             >
-              {editingWarehouse ? 'Lưu Thay Đổi' : 'Thêm Kho'}
+              {isSaving ? 'Đang lưu SQL Server...' : editingWarehouse ? 'Lưu Thay Đổi' : 'Thêm Kho'}
             </button>
           </>
         }

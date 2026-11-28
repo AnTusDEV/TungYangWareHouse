@@ -103,9 +103,7 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
     items: { title: 'Danh Mục Hàng Hóa', subtitle: 'Quản lý thông tin, mã hàng, đơn vị tính & định mức tồn' },
     'stock-in': { title: 'Phiếu Nhập Kho', subtitle: 'Tạo phiếu nhập vật tư & tự động cộng tồn kho' },
     'stock-out': { title: 'Phiếu Xuất Kho', subtitle: 'Tạo phiếu xuất cấp phát & tự động trừ tồn kho' },
-    'stock-lookup': { title: 'Tra Cứu Tồn Kho', subtitle: 'Kiểm tra nhanh số lượng tồn, lọc vị trí kho & cảnh báo' },
-    history: { title: 'Lịch Sử Nhập Xuất', subtitle: 'Theo dõi toàn bộ biến động kho chi tiết theo thời gian' },
-    statistics: { title: 'Thống Kê Cấp Phát', subtitle: 'Thống kê sản phẩm đã cấp phát theo bộ phận và mặt hàng theo tháng, quý, năm' },
+    statistics: { title: 'Thống Kê Cấp Phát', subtitle: 'Thống kê sản phẩm đã cấp phát theo bộ phận và mặt hàng theo tuần, tháng, quý, năm' },
     reports: { title: 'Báo Cáo Thống Kê', subtitle: 'Thống kê tổng hợp Nhập - Xuất - Tồn & phân tích mặt hàng' },
     categories: { title: 'Quản Lý Danh Mục', subtitle: 'Phân loại nhóm hàng & danh mục đơn vị tính linh hoạt' },
     accounts: { title: 'Quản Lý Tài Khoản', subtitle: 'Quản lý người dùng, phân quyền & bảo mật hệ thống' },
@@ -116,7 +114,7 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
 
   const handleSelectItem = (itemCode: string) => {
     setSearchTerm(itemCode);
-    setActiveTab('stock-lookup');
+    setActiveTab('items');
     setIsOpen(false);
   };
 
@@ -222,12 +220,12 @@ export function Header({ onOpenQuickStockIn, onOpenQuickStockOut }: HeaderProps)
                   <div className="p-2 bg-slate-50 dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800">
                     <button
                       onClick={() => {
-                        setActiveTab('stock-lookup');
+                        setActiveTab('items');
                         setIsOpen(false);
                       }}
                       className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:underline"
                     >
-                      <span>Xem tất cả trong trang Tra Cứu Tồn Kho</span>
+                      <span>Xem tất cả trong Danh Mục Hàng Hóa</span>
                       <ArrowRight className="h-3.5 w-3.5" />
                     </button>
                   </div>

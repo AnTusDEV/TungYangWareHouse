@@ -86,7 +86,7 @@ export function LoginView() {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Nhập username (vd: admin, nhanvien)"
+                  placeholder="Nhập tên đăng nhập"
                   className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-300 dark:border-amber-500/30 text-slate-900 dark:text-white text-sm placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
                   autoComplete="username"
                   autoFocus

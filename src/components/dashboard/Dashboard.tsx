@@ -202,7 +202,7 @@ export function Dashboard() {
 
         {/* KPI 4: Out of Stock Warnings */}
         <div
-          onClick={() => setActiveTab('stock-lookup')}
+          onClick={() => setActiveTab('items')}
           className="p-4 rounded-2xl border border-rose-500/30 bg-rose-500/5 dark:bg-rose-500/10 shadow-sm cursor-pointer hover:border-rose-500/50 transition-colors"
         >
           <div className="flex items-center justify-between text-rose-600 dark:text-rose-400">
@@ -428,7 +428,7 @@ export function Dashboard() {
               </p>
             </div>
             <button
-              onClick={() => setActiveTab('stock-lookup')}
+              onClick={() => setActiveTab('items')}
               className="text-xs text-cyan-500 hover:underline font-semibold"
             >
               Xem tất cả

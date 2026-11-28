@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Boxes, Plus, Edit2, Trash2, Layers, Tag, Eye, RefreshCw } from 'lucide-react';
+import { Boxes, Plus, Edit2, Trash2, Layers, Tag, Eye, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 import { useInventoryStore } from '../../store/useInventoryStore';
 import { Category, Unit } from '../../types/inventory';
 import { Modal } from '../common/Modal';
@@ -21,6 +21,10 @@ export function CategoryUnitManager() {
   } = useInventoryStore();
 
   const [activeSubTab, setActiveSubTab] = useState<'categories' | 'units'>('categories');
+  const [isSaving, setIsSaving] = useState(false);
+  const [alertInfo, setAlertInfo] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [catModalError, setCatModalError] = useState<string | null>(null);
+  const [unitModalError, setUnitModalError] = useState<string | null>(null);
 
   // Category Items Modal State
   const [selectedCategoryModal, setSelectedCategoryModal] = useState<Category | null>(null);
@@ -40,73 +44,147 @@ export function CategoryUnitManager() {
   // Handle Category Submit
   const handleOpenAddCat = () => {
     setEditingCategory(null);
+    setCatModalError(null);
     setCatFormData({ code: `NH0${categories.length + 1}`, name: '', description: '' });
     setIsCatModalOpen(true);
   };
 
   const handleOpenEditCat = (cat: Category) => {
     setEditingCategory(cat);
+    setCatModalError(null);
     setCatFormData({ code: cat.code, name: cat.name, description: cat.description || '' });
     setIsCatModalOpen(true);
   };
 
-  const handleCatSubmit = (e: React.FormEvent) => {
+  const handleCatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!catFormData.name.trim()) return;
+    if (!catFormData.name.trim() || isSaving) return;
 
-    if (editingCategory) {
-      updateCategory(editingCategory.id, catFormData);
-    } else {
-      addCategory(catFormData);
+    setCatModalError(null);
+    setIsSaving(true);
+    try {
+      const res = editingCategory
+        ? await updateCategory(editingCategory.id, catFormData)
+        : await addCategory(catFormData);
+
+      if (res.success) {
+        setAlertInfo({ type: 'success', message: res.message });
+        setIsCatModalOpen(false);
+      } else {
+        setCatModalError(res.message);
+      }
+    } finally {
+      setIsSaving(false);
     }
-    setIsCatModalOpen(false);
   };
 
-  const handleConfirmDeleteCat = () => {
-    if (!deletingCatId) return;
-    const success = deleteCategory(deletingCatId);
-    if (!success) {
-      alert('Không thể xóa nhóm hàng vì đang có hàng hóa thuộc nhóm này!');
+  const handleConfirmDeleteCat = async () => {
+    if (!deletingCatId || isSaving) return;
+    setIsSaving(true);
+    try {
+      const res = await deleteCategory(deletingCatId);
+      setAlertInfo({
+        type: res.success ? 'success' : 'error',
+        message: res.message,
+      });
+      setDeletingCatId(null);
+    } finally {
+      setIsSaving(false);
     }
-    setDeletingCatId(null);
   };
 
   // Handle Unit Submit
   const handleOpenAddUnit = () => {
     setEditingUnit(null);
+    setUnitModalError(null);
     setUnitFormData({ name: '', description: '' });
     setIsUnitModalOpen(true);
   };
 
   const handleOpenEditUnit = (u: Unit) => {
     setEditingUnit(u);
+    setUnitModalError(null);
     setUnitFormData({ name: u.name, description: u.description || '' });
     setIsUnitModalOpen(true);
   };
 
-  const handleUnitSubmit = (e: React.FormEvent) => {
+  const handleUnitSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!unitFormData.name.trim()) return;
+    if (!unitFormData.name.trim() || isSaving) return;
 
-    if (editingUnit) {
-      updateUnit(editingUnit.id, unitFormData);
-    } else {
-      addUnit(unitFormData);
+    setUnitModalError(null);
+    setIsSaving(true);
+    try {
+      const res = editingUnit
+        ? await updateUnit(editingUnit.id, unitFormData)
+        : await addUnit(unitFormData);
+
+      if (res.success) {
+        setAlertInfo({ type: 'success', message: res.message });
+        setIsUnitModalOpen(false);
+      } else {
+        setUnitModalError(res.message);
+      }
+    } finally {
+      setIsSaving(false);
     }
-    setIsUnitModalOpen(false);
   };
 
-  const handleConfirmDeleteUnit = () => {
-    if (!deletingUnitId) return;
-    const success = deleteUnit(deletingUnitId);
-    if (!success) {
-      alert('Không thể xóa đơn vị tính vì đang được sử dụng bởi các mặt hàng!');
+  const handleConfirmDeleteUnit = async () => {
+    if (!deletingUnitId || isSaving) return;
+    setIsSaving(true);
+    try {
+      const res = await deleteUnit(deletingUnitId);
+      setAlertInfo({
+        type: res.success ? 'success' : 'error',
+        message: res.message,
+      });
+      setDeletingUnitId(null);
+    } finally {
+      setIsSaving(false);
     }
-    setDeletingUnitId(null);
+  };
+
+  const handleSyncFromItems = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const res = await syncMissingCategoriesFromItems();
+      setAlertInfo({
+        type: res.success ? 'success' : 'error',
+        message: res.message,
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
     <div className="space-y-6">
+      {alertInfo && (
+        <div
+          className={`p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${alertInfo.type === 'success'
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+            : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+            }`}
+        >
+          <div className="flex items-center gap-2">
+            {alertInfo.type === 'success' ? (
+              <CheckCircle className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="h-4 w-4 shrink-0" />
+            )}
+            <span>{alertInfo.message}</span>
+          </div>
+          <button
+            onClick={() => setAlertInfo(null)}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Header & Tabs */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -156,18 +234,12 @@ export function CategoryUnitManager() {
             </h3>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => {
-                  const res = syncMissingCategoriesFromItems();
-                  if (res.addedCats > 0 || res.addedUnits > 0) {
-                    alert(`Đã khôi phục thành công ${res.addedCats} nhóm hàng và ${res.addedUnits} đơn vị tính từ danh mục sản phẩm!`);
-                  } else {
-                    alert('Tất cả nhóm hàng và đơn vị tính đã được đồng bộ đầy đủ từ sản phẩm!');
-                  }
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm transition-all"
+                onClick={handleSyncFromItems}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm transition-all disabled:opacity-50"
                 title="Quét lại sản phẩm và tự động khôi phục các nhóm hàng còn thiếu"
               >
-                <RefreshCw className="h-3.5 w-3.5" />
+                <RefreshCw className={`h-3.5 w-3.5 ${isSaving ? 'animate-spin' : ''}`} />
                 <span>Đồng Bộ Từ Sản Phẩm</span>
               </button>
               <button
@@ -190,13 +262,11 @@ export function CategoryUnitManager() {
                 Các sản phẩm đã có nhóm hàng nhưng danh mục hệ thống chưa được đồng bộ. Bấm nút dưới đây để khôi phục ngay lập tức!
               </p>
               <button
-                onClick={() => {
-                  const res = syncMissingCategoriesFromItems();
-                  alert(`Đã khôi phục thành công ${res.addedCats} nhóm hàng từ sản phẩm!`);
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-600/20"
+                onClick={handleSyncFromItems}
+                disabled={isSaving}
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-600/20 disabled:opacity-50"
               >
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw className={`h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
                 <span>Khôi Phục Nhóm Hàng Từ Sản Phẩm</span>
               </button>
             </div>
@@ -278,18 +348,12 @@ export function CategoryUnitManager() {
             </h3>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => {
-                  const res = syncMissingCategoriesFromItems();
-                  if (res.addedUnits > 0) {
-                    alert(`Đã khôi phục thành công ${res.addedUnits} đơn vị tính từ danh mục sản phẩm!`);
-                  } else {
-                    alert('Tất cả đơn vị tính đã được đồng bộ đầy đủ!');
-                  }
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm transition-all"
+                onClick={handleSyncFromItems}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm transition-all disabled:opacity-50"
                 title="Quét lại sản phẩm và tự động khôi phục các đơn vị tính còn thiếu"
               >
-                <RefreshCw className="h-3.5 w-3.5" />
+                <RefreshCw className={`h-3.5 w-3.5 ${isSaving ? 'animate-spin' : ''}`} />
                 <span>Đồng Bộ Từ Sản Phẩm</span>
               </button>
               <button
@@ -346,22 +410,30 @@ export function CategoryUnitManager() {
           <>
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => setIsCatModalOpen(false)}
-              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 disabled:opacity-50"
             >
               Hủy
             </button>
             <button
               type="submit"
               form="cat-form"
-              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
+              disabled={isSaving}
+              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-60"
             >
-              Lưu
+              {isSaving ? 'Đang lưu...' : 'Lưu'}
             </button>
           </>
         }
       >
         <form id="cat-form" onSubmit={handleCatSubmit} className="space-y-4">
+          {catModalError && (
+            <div className="p-3 rounded-xl bg-rose-500/10 text-rose-500 border border-rose-500/20 text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{catModalError}</span>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-semibold mb-1">Mã Nhóm Hàng</label>
             <input
@@ -405,22 +477,30 @@ export function CategoryUnitManager() {
           <>
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => setIsUnitModalOpen(false)}
-              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+              className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 disabled:opacity-50"
             >
               Hủy
             </button>
             <button
               type="submit"
               form="unit-form"
-              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
+              disabled={isSaving}
+              className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-60"
             >
-              Lưu
+              {isSaving ? 'Đang lưu...' : 'Lưu'}
             </button>
           </>
         }
       >
         <form id="unit-form" onSubmit={handleUnitSubmit} className="space-y-4">
+          {unitModalError && (
+            <div className="p-3 rounded-xl bg-rose-500/10 text-rose-500 border border-rose-500/20 text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{unitModalError}</span>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-semibold mb-1">Tên Đơn Vị Tính</label>
             <input
